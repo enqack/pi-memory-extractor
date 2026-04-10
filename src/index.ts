@@ -64,18 +64,33 @@ function TODAY(): string {
  * Includes the knowledge index and today's daily log (if they exist).
  */
 function buildSessionContext(vaultRoot: string): string | null {
-  const knowledgeIndexPath = path.join(vaultRoot, "logs", "knowledge", "index.md");
+  const knowledgeIndexPath = path.join(
+    vaultRoot,
+    "logs",
+    "knowledge",
+    "index.md",
+  );
   const todayLogPath = path.join(vaultRoot, "logs", "daily", `${TODAY()}.md`);
 
   const parts: string[] = [];
 
   if (fs.existsSync(knowledgeIndexPath)) {
-    const lines = fs.readFileSync(knowledgeIndexPath, "utf-8").trim().split("\n");
+    const lines = fs
+      .readFileSync(knowledgeIndexPath, "utf-8")
+      .trim()
+      .split("\n");
     // Show only the header and the last 10 entries of the index to save context
-    const recentLines = lines.length > 50 
-      ? [...lines.slice(0, 5), "...", "... [truncated for brevity] ...", "...", ...lines.slice(-15)]
-      : lines;
-    
+    const recentLines =
+      lines.length > 50
+        ? [
+            ...lines.slice(0, 5),
+            "...",
+            "... [truncated for brevity] ...",
+            "...",
+            ...lines.slice(-15),
+          ]
+        : lines;
+
     parts.push(`## Knowledge Base Index (Recent entries)
 ${recentLines.join("\n")}
 
@@ -116,7 +131,6 @@ function readLastState(pi: ExtensionAPI): ExtractorState | null {
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
-
   // Module-level vault root cache (set on session_start, reused in other events)
   let vaultRoot: string | null = null;
 
@@ -140,7 +154,7 @@ export default function (pi: ExtensionAPI) {
         if (data?.lastExtractedAt) {
           ctx.ui.setStatus(
             "memory-extractor",
-            `last extracted: ${new Date(data.lastExtractedAt).toLocaleTimeString()}`
+            `MemEx: last extracted: ${new Date(data.lastExtractedAt).toLocaleTimeString()}`,
           );
         }
       }
@@ -155,17 +169,17 @@ export default function (pi: ExtensionAPI) {
           content: contextMessage,
           display: true,
         },
-        { triggerTurn: false }
+        { triggerTurn: false },
       );
       ctx.ui.notify("[Memory Extractor] Knowledge context injected.", "info");
     } else {
       ctx.ui.notify(
         "[Memory Extractor] No knowledge base or daily log found yet.",
-        "info"
+        "info",
       );
     }
 
-    ctx.ui.setStatus("memory-extractor", "idle");
+    ctx.ui.setStatus("memory-extractor", "MemEx: idle");
   });
 
   // ---------------------------------------------------------------------------
@@ -173,14 +187,17 @@ export default function (pi: ExtensionAPI) {
   // ---------------------------------------------------------------------------
   pi.on("session_before_compact", async (_event, ctx) => {
     if (!vaultRoot) vaultRoot = findVaultRoot(ctx.cwd);
-    ctx.ui.setStatus("memory-extractor", "extracting…");
-    ctx.ui.notify("[Memory Extractor] Capturing knowledge before compaction…", "info");
+    ctx.ui.setStatus("memory-extractor", "MemEx: extracting…");
+    ctx.ui.notify(
+      "[Memory Extractor] Capturing knowledge before compaction…",
+      "info",
+    );
 
     // Fire-and-forget — do NOT block compaction
     runExtraction(pi, ctx, vaultRoot, "pre_compact").catch((err) => {
       ctx.ui.notify(
         `[Memory Extractor] Extraction error: ${(err as Error).message}`,
-        "error"
+        "error",
       );
     });
 
@@ -190,7 +207,7 @@ export default function (pi: ExtensionAPI) {
       lastExtractedEvent: "pre_compact",
     } satisfies ExtractorState);
 
-    ctx.ui.setStatus("memory-extractor", "idle");
+    ctx.ui.setStatus("memory-extractor", "MemEx: idle");
     // Return undefined — let compaction proceed normally
   });
 
@@ -199,7 +216,7 @@ export default function (pi: ExtensionAPI) {
   // ---------------------------------------------------------------------------
   pi.on("session_shutdown", async (_event, ctx) => {
     if (!vaultRoot) vaultRoot = findVaultRoot(ctx.cwd);
-    ctx.ui.setStatus("memory-extractor", "extracting…");
+    ctx.ui.setStatus("memory-extractor", "MemEx: extracting…");
 
     // Fire-and-forget — do not block shutdown
     runExtraction(pi, ctx, vaultRoot, "session_end").catch(() => {
@@ -216,12 +233,13 @@ export default function (pi: ExtensionAPI) {
   // Command: /extract-knowledge
   // ---------------------------------------------------------------------------
   pi.registerCommand("extract-knowledge", {
-    description: "Manually trigger session knowledge extraction to the daily log",
+    description:
+      "Manually trigger session knowledge extraction to the daily log",
     handler: async (_args, ctx) => {
       await ctx.waitForIdle();
       if (!vaultRoot) vaultRoot = findVaultRoot(ctx.cwd);
 
-      ctx.ui.setStatus("memory-extractor", "extracting…");
+      ctx.ui.setStatus("memory-extractor", "MemEx: extracting…");
       ctx.ui.notify("[Memory Extractor] Starting extraction…", "info");
 
       try {
@@ -230,14 +248,17 @@ export default function (pi: ExtensionAPI) {
           lastExtractedAt: Date.now(),
           lastExtractedEvent: "manual",
         } satisfies ExtractorState);
-        ctx.ui.notify("[Memory Extractor] Extraction prompt sent to agent.", "info");
+        ctx.ui.notify(
+          "[Memory Extractor] Extraction prompt sent to agent.",
+          "info",
+        );
       } catch (err) {
         ctx.ui.notify(
           `[Memory Extractor] Extraction failed: ${(err as Error).message}`,
-          "error"
+          "error",
         );
       } finally {
-        ctx.ui.setStatus("memory-extractor", "idle");
+        ctx.ui.setStatus("memory-extractor", "MemEx: idle");
       }
     },
   });
@@ -246,26 +267,33 @@ export default function (pi: ExtensionAPI) {
   // Command: /compile-knowledge
   // ---------------------------------------------------------------------------
   pi.registerCommand("compile-knowledge", {
-    description: "Compile daily session logs into structured knowledge base articles",
+    description:
+      "Compile daily session logs into structured knowledge base articles",
     handler: async (args, ctx) => {
       await ctx.waitForIdle();
       if (!vaultRoot) vaultRoot = findVaultRoot(ctx.cwd);
 
       const force = /--force|-f/.test(args ?? "");
 
-      ctx.ui.setStatus("memory-extractor", "compiling…");
-      ctx.ui.notify(`[Memory Compiler] Starting compilation${force ? " (force mode)" : ""}…`, "info");
+      ctx.ui.setStatus("memory-extractor", "MemEx: compiling…");
+      ctx.ui.notify(
+        `[Memory Compiler] Starting compilation${force ? " (force mode)" : ""}…`,
+        "info",
+      );
 
       try {
         await runCompilation(pi, ctx, vaultRoot, force);
-        ctx.ui.notify("[Memory Compiler] Compilation prompt sent to agent.", "info");
+        ctx.ui.notify(
+          "[Memory Compiler] Compilation prompt sent to agent.",
+          "info",
+        );
       } catch (err) {
         ctx.ui.notify(
           `[Memory Compiler] Compilation failed: ${(err as Error).message}`,
-          "error"
+          "error",
         );
       } finally {
-        ctx.ui.setStatus("memory-extractor", "idle");
+        ctx.ui.setStatus("memory-extractor", "MemEx: idle");
       }
     },
   });
@@ -288,8 +316,9 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       reason: Type.Optional(
         Type.String({
-          description: "Optional reason or context for the extraction (e.g. 'checkpoint after refactor')",
-        })
+          description:
+            "Optional reason or context for the extraction (e.g. 'checkpoint after refactor')",
+        }),
       ),
     }) as any,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
@@ -332,8 +361,9 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       force: Type.Optional(
         Type.Boolean({
-          description: "If true, re-process all daily logs even if they have already been compiled.",
-        })
+          description:
+            "If true, re-process all daily logs even if they have already been compiled.",
+        }),
       ),
     }) as any,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
@@ -359,37 +389,48 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "search_knowledge",
     label: "Search Knowledge Base",
-    description: "Search the structured knowledge base for a specific keyword or query.",
+    description:
+      "Search the structured knowledge base for a specific keyword or query.",
     parameters: Type.Object({
       query: Type.String({ description: "Keyword or topic to search for" }),
     }) as any,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       if (!vaultRoot) vaultRoot = findVaultRoot(ctx.cwd);
       const kbDir = path.join(vaultRoot, "logs", "knowledge");
-      
+
       if (!fs.existsSync(kbDir)) {
-          return { content: [{ type: "text", text: "Knowledge base directory not found." }] };
+        return {
+          content: [
+            { type: "text", text: "Knowledge base directory not found." },
+          ],
+        };
       }
 
       // We use a simple glob/grep approach to find matches in the index or article bodies
       const indexPath = path.join(kbDir, "index.md");
       let results = "";
-      
+
       if (fs.existsSync(indexPath)) {
-          const indexContent = fs.readFileSync(indexPath, "utf-8");
-          const matches = indexContent.split("\n").filter(line => 
-              line.toLowerCase().includes(params.query.toLowerCase())
+        const indexContent = fs.readFileSync(indexPath, "utf-8");
+        const matches = indexContent
+          .split("\n")
+          .filter((line) =>
+            line.toLowerCase().includes(params.query.toLowerCase()),
           );
-          if (matches.length > 0) {
-              results += `Matches in Index:\n${matches.join("\n")}\n\n`;
-          }
+        if (matches.length > 0) {
+          results += `Matches in Index:\n${matches.join("\n")}\n\n`;
+        }
       }
 
       return {
-          content: [{ 
-              type: "text", 
-              text: results || "No direct matches found in the index. Try a different keyword or check recent logs." 
-          }]
+        content: [
+          {
+            type: "text",
+            text:
+              results ||
+              "No direct matches found in the index. Try a different keyword or check recent logs.",
+          },
+        ],
       };
     },
   });
@@ -402,7 +443,9 @@ export default function (pi: ExtensionAPI) {
     label: "Read Knowledge Article",
     description: "Read the full content of a specific knowledge article slug.",
     parameters: Type.Object({
-      slug: Type.String({ description: "The slug of the article to read (e.g. 'm8-workflow')" }),
+      slug: Type.String({
+        description: "The slug of the article to read (e.g. 'm8-workflow')",
+      }),
     }) as any,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       if (!vaultRoot) vaultRoot = findVaultRoot(ctx.cwd);
@@ -411,18 +454,28 @@ export default function (pi: ExtensionAPI) {
       // Search across categories
       const categories = ["concepts", "connections", "qa", "archive"];
       for (const cat of categories) {
-          const filePath = path.join(kbDir, cat, `${params.slug}.md`);
-          if (fs.existsSync(filePath)) {
-              return { content: [{ type: "text", text: fs.readFileSync(filePath, "utf-8") }] };
-          }
+        const filePath = path.join(kbDir, cat, `${params.slug}.md`);
+        if (fs.existsSync(filePath)) {
+          return {
+            content: [
+              { type: "text", text: fs.readFileSync(filePath, "utf-8") },
+            ],
+          };
+        }
       }
 
-      return { content: [{ type: "text", text: `Article '${params.slug}' not found.` }] };
+      return {
+        content: [
+          { type: "text", text: `Article '${params.slug}' not found.` },
+        ],
+      };
     },
   });
 
   // ---------------------------------------------------------------------------
   // Ready
   // ---------------------------------------------------------------------------
-  console.log("[pi-memory-extractor] Extension loaded (v2.0.0 — ExtensionAPI native).");
+  console.log(
+    "[pi-memory-extractor] Extension loaded (v2.0.0 — ExtensionAPI native).",
+  );
 }
