@@ -1,38 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { PiMemoryConfig } from "./config.js";
 
 /**
  * compiler.ts — Knowledge base compilation module.
- *
- * Lists available daily logs and triggers the LLM via pi.sendUserMessage()
- * to compile them into structured knowledge articles under knowledge/.
- *
- * The agent is responsible for reading, creating, and updating the knowledge
- * articles using its built-in file tools. This module just builds the prompt
- * and delivers it.
- *
- *
- * No subprocess calls. No standalone CLI. Pure ExtensionAPI.
+ * Builds the compilation prompt and triggers the LLM via pi.sendUserMessage().
  */
 
 /**
- * Configuration for directory names relative to the vault root.
+ * Parses knowledge/log.md to find which daily logs have already been compiled.
  */
-const RELATIVE_PATHS = {
-  VAULT_ROOT: "knowledge-base",
-  DAILY: "daily",
-  KNOWLEDGE: "knowledge",
-  DEEP_THOUGHTS: "deep-thoughts",
-  REPORTS: "reports",
-};
-
-/**
- * Parses logs/knowledge/log.md to determine which daily logs have already
- * been successfully compiled into the knowledge base.
- */
-function getCompiledSources(vaultRoot: string): Set<string> {
-  const logPath = path.join(vaultRoot, RELATIVE_PATHS.KNOWLEDGE, "log.md");
+function getCompiledSources(vaultRoot: string, config: PiMemoryConfig): Set<string> {
+  const logPath = path.join(vaultRoot, config.KNOWLEDGE, "log.md");
   const compiled = new Set<string>();
 
   if (!fs.existsSync(logPath)) return compiled;
@@ -57,16 +37,25 @@ function getCompiledSources(vaultRoot: string): Set<string> {
 /**
  * Build the compilation prompt for the LLM.
  */
-function buildCompilationPrompt(vaultRoot: string, dailyLogs: string[]): string {
-  const logList = dailyLogs.map((l) => `- ${RELATIVE_PATHS.DAILY}/${l}`).join("\n");
+function buildCompilationPrompt(
+  projectRoot: string,
+  vaultRoot: string,
+  config: PiMemoryConfig,
+  dailyLogs: string[]
+): string {
+  const getRel = (p: string) => path.relative(projectRoot, path.join(vaultRoot, p));
+
+  const relDaily = getRel(config.DAILY);
+  const relKnowledge = getRel(config.KNOWLEDGE);
+  const logList = dailyLogs.map((l) => `- ${relDaily}/${l}`).join("\n");
 
   return `You are a knowledge base compiler for the project vault.
 
-**Your task:** Process the daily session logs listed below and update the knowledge base at \`${RELATIVE_PATHS.KNOWLEDGE}/\`.
+**Your task:** Process the daily session logs listed below and update the knowledge base at \`${relKnowledge}/\`.
 
 **Knowledge Base Schema & Article Types:**
 
-### 1. Concept Article (\`${RELATIVE_PATHS.KNOWLEDGE}/concepts/<slug>.md\`)
+### 1. Concept Article (\`${relKnowledge}/concepts/<slug>.md\`)
 A concept article covers one topic thoroughly (techniques, devices, theory, workflow, or project decisions).
 - **Frontmatter**:
 \`\`\`yaml
@@ -87,7 +76,7 @@ wikilinks: []        # other articles this one links to
   4. **Connections** — [[wikilinks]] to related articles (minimum 2)
   5. **Sources** — list of session dates that contributed this knowledge
 
-### 2. Connection Article (\`${RELATIVE_PATHS.KNOWLEDGE}/connections/<slug>.md\`)
+### 2. Connection Article (\`${relKnowledge}/connections/<slug>.md\`)
 Documents how two or more concepts relate or interact.
 - **Frontmatter**:
 \`\`\`yaml
@@ -106,7 +95,7 @@ sources: []
   3. **Practical Implications** — how this connection affects production decisions
   4. **See Also** — [[wikilinks]] to the parent concept articles
 
-### 3. Q&A Article (\`${RELATIVE_PATHS.KNOWLEDGE}/qa/<slug>.md\`)
+### 3. Q&A Article (\`${relKnowledge}/qa/<slug>.md\`)
 Captures explicit questions and answers from sessions.
 - **Frontmatter**:
 \`\`\`yaml
@@ -124,24 +113,24 @@ sources: []
   3. **Related** — [[wikilinks]] to relevant concept articles
 
 ### 4. Mermaid Knowledge Graph
-Maintain a visual representation of connections in \`${RELATIVE_PATHS.KNOWLEDGE}/connections/graph.mmd\`.
+Maintain a visual representation of connections in \`${relKnowledge}/connections/graph.mmd\`.
 - **Syntax**: Mermaid \`graph TD\`
-- **Content**: Use nodes for concept slugs and edges to represent relationships (e.g., \`[[slug1]] --> [[slug2]]\`).
-- **Update Rule**: Re-generate or update this file every time a compilation run occurs by scanning existing articles and wikilinks.
+- **Content**: Use nodes for concept slugs and edges to represent relationships.
+- **Update Rule**: Re-generate or update this file every compilation run.
 
 ### 5. Archiving Stale Knowledge
 - **Threshold**: **6 months** (based on frontmatter \`date\`).
-- **Logic**: If an article is older than 6 months and describes a temporary workflow, old debug session, or superseded version, move it from its category folder to \`${RELATIVE_PATHS.KNOWLEDGE}/archive/\`.
-- **Reference**: Update all indexes to reflect the move. Do NOT delete the article; just move it.
+- **Logic**: If an article is older than 6 months and describes a temporary workflow or superseded version, move it to \`${relKnowledge}/archive/\`.
+- **Reference**: Update all indexes to reflect the move. Do NOT delete the article.
 
 **Compilation Rules:**
-1. **Deduplication**: If an existing article covers the knowledge, update it with new detail rather than creating a duplicate.
-2. **Substance**: Focus on decisions made, techniques learned, hardware behaviors discovered, theory applied, and project context.
-3. **Standards**: Every article needs at least 200 words and 2 [[wikilinks]] to other articles.
-4. **Log**: Always append a compilation entry to \`${RELATIVE_PATHS.KNOWLEDGE}/log.md\` in this format:
+1. **Deduplication**: Update existing articles rather than creating duplicates.
+2. **Substance**: Focus on decisions, techniques, hardware behaviors, theory, and project context.
+3. **Standards**: Every article needs at least 200 words and 2 [[wikilinks]].
+4. **Log**: Always append a compilation entry to \`${relKnowledge}/log.md\` in this format:
    \`\`\`
    ## YYYY-MM-DD HH:MM — Compilation Run
-   - Source: ${RELATIVE_PATHS.DAILY}/YYYY-MM-DD.md
+   - Source: ${relDaily}/YYYY-MM-DD.md
    - Created: [list of new article slugs, or "none"]
    - Updated: [list of updated article slugs, or "none"]
    - Archived: [list of archived article slugs, or "none"]
@@ -156,16 +145,15 @@ Use the Read, Write, Edit, Grep, and Find tools as needed to complete this task.
 
 /**
  * Main compilation entry point.
- * Lists daily logs and sends the compilation prompt to the LLM via
- * pi.sendUserMessage() so the running agent handles all file operations.
  */
 export async function runCompilation(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   vaultRoot: string,
+  config: PiMemoryConfig,
   force: boolean = false
 ): Promise<void> {
-  const dailyDir = path.join(vaultRoot, RELATIVE_PATHS.DAILY);
+  const dailyDir = path.join(vaultRoot, config.DAILY);
 
   if (!fs.existsSync(dailyDir)) {
     ctx.ui.notify("[Memory Compiler] No daily logs directory found — nothing to compile.", "info");
@@ -179,11 +167,10 @@ export async function runCompilation(
     return;
   }
 
-  logs.sort(); // Chronological order
+  logs.sort();
 
-  // Incremental filtering
   if (!force) {
-    const alreadyCompiled = getCompiledSources(vaultRoot);
+    const alreadyCompiled = getCompiledSources(vaultRoot, config);
     const filteredLogs = logs.filter((l) => !alreadyCompiled.has(l));
 
     if (filteredLogs.length === 0) {
@@ -205,17 +192,9 @@ export async function runCompilation(
     ctx.ui.notify(`[Memory Compiler] Force mode: Processing all ${logs.length} logs.`, "info");
   }
 
-  const prompt = buildCompilationPrompt(vaultRoot, logs);
+  const prompt = buildCompilationPrompt(ctx.cwd, vaultRoot, config, logs);
 
-  ctx.ui.notify(
-    `[Memory Compiler] Triggering compilation of ${logs.length} daily log(s)…`,
-    "info"
-  );
+  ctx.ui.notify(`[Memory Compiler] Triggering compilation of ${logs.length} daily log(s)…`, "info");
 
-  // deliverAs: "followUp" — waits for agent to fully finish any current task
-  // before delivering this prompt.
-  pi.sendUserMessage(
-    `[Memory Compiler]\n\n${prompt}`,
-    { deliverAs: "followUp" }
-  );
+  pi.sendUserMessage(`[Memory Compiler]\n\n${prompt}`, { deliverAs: "followUp" });
 }
