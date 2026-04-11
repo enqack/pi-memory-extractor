@@ -13,8 +13,20 @@ import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
  * The agent is expected to write the daily log itself using its built-in
  * file tools. We instruct it exactly where to write and what format to use.
  *
+ *
  * No subprocess calls. No standalone CLI. Pure ExtensionAPI.
  */
+
+/**
+ * Configuration for directory names relative to the vault root.
+ */
+const RELATIVE_PATHS = {
+  VAULT_ROOT: "knowledge-base",
+  DAILY: "daily",
+  KNOWLEDGE: "knowledge",
+  DEEP_THOUGHTS: "deep-thoughts",
+  REPORTS: "reports",
+};
 
 const TODAY = () => new Date().toISOString().split("T")[0];
 
@@ -77,6 +89,8 @@ function serializeTranscript(ctx: ExtensionContext): string {
   return lines.join("\n\n");
 }
 
+// Internal knowledge-base configuration is now managed via RELATIVE_PATHS
+
 /**
  * Build the extraction prompt for the LLM.
  */
@@ -86,7 +100,7 @@ function buildExtractionPrompt(
   deepThoughtsCriteria: string
 ): string {
   const today = TODAY();
-  const dailyLogPath = path.join(vaultRoot, "logs", "daily", `${today}.md`);
+  const dailyLogPath = path.join(vaultRoot, RELATIVE_PATHS.DAILY, `${today}.md`);
 
   return `You are a knowledge extractor reviewing a Pi agent session transcript.
 
@@ -164,19 +178,9 @@ export async function runExtraction(
   const prompt = buildExtractionPrompt(vaultRoot, transcript, deepThoughtsCriteria);
 
   // Trigger the LLM in the current session to run the extraction.
-  // deliverAs: "steer" queues after the current turn's tool calls finish.
-  // deliverAs: "followUp" waits for agent to fully finish.
-  // We use followUp to avoid competing with any active tool calls.
-  try {
-    pi.sendUserMessage(
-      `[Memory Extractor — triggered by: ${triggerEvent}]\n\n${prompt}`,
-      { deliverAs: "followUp" }
-    );
-  } catch {
-    // If agent is not streaming, sendUserMessage with no deliverAs option
-    // triggers immediately. The overload handles this gracefully.
-    pi.sendUserMessage(
-      `[Memory Extractor — triggered by: ${triggerEvent}]\n\n${prompt}`
-    );
-  }
+  // deliverAs: "followUp" waits for agent to fully finish any current task.
+  pi.sendUserMessage(
+    `[Memory Extractor — triggered by: ${triggerEvent}]\n\n${prompt}`,
+    { deliverAs: "followUp" }
+  );
 }

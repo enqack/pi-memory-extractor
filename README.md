@@ -7,7 +7,7 @@ A sophisticated knowledge-management extension for the [Pi AI Agent](https://git
 The extension operates on a continuous **Capture → Distill → Inject** cycle:
 
 1.  **Injection**: At session start, the extension injects the 10 most recent entries from the knowledge base and instructs the agent on how to retrieve deeper history.
-2.  **Capture**: During the session (checkpoints, compaction, shutdown), discoveries are extracted into `logs/daily/YYYY-MM-DD.md`.
+2.  **Capture**: During the session (checkpoints, compaction, shutdown), discoveries are extracted into `daily/YYYY-MM-DD.md`.
 3.  **Distillation**: Daily logs are compiled into a structured, tiered knowledge base (Concepts, Connections, and Q&A).
 
 ---
@@ -21,28 +21,24 @@ To handle repositories with hundreds of articles without bloating context, the e
 - **Optimized Injection**: Only the 10 most recent summaries are injected at startup to keep the context window clear.
 
 ### 🧱 Incremental & Hierarchical Compilation
-- **Incremental Logic**: The compiler parses `logs/knowledge/log.md` to automatically skip daily logs that have already been processed.
+- **Incremental Logic**: The compiler parses `knowledge/log.md` to automatically skip daily logs that have already been processed.
 - **Hierarchical Indexing**: Categorized indexes (`concepts/index.md`, `connections/index.md`, etc.) are maintained alongside a master catalog for efficient scaling.
 - **Force Flag**: Supports `/compile-knowledge --force` to re-process the entire history if needed.
 
 ### 📂 Knowledge Lifecycle (Archiving)
-- **Automated Archiving**: Articles older than **6 months** that describe temporary workflows or superseded decisions are automatically moved to `logs/knowledge/archive/` during compilation.
+- **Automated Archiving**: Articles older than **6 months** that describe temporary workflows or superseded decisions are automatically moved to `knowledge/archive/` during compilation.
 
 ---
 
-## 🏗 Technical Excellence
-- **In-Session LLM Execution**: Uses the active agent session for extractions/compilations, reducing latency.
-- **Concurrency Protection**: Uses `withFileMutationQueue` to ensure safe, serialized writes.
-- **Dynamic Discovery**: Automatically identifies the project root by searching for a `logs/daily` sentinel (up to 6 levels up). No dependency on `CLAUDE.md`.
-- **Persistent State**: Stores session metadata directly in the session file via `pi.appendEntry`.
-
 ## 📂 Log Directory Structure
 
-The extension organizes knowledge into the following structure at your project root:
+The extension organizes knowledge relative to the **detected vault root** (the directory containing the `daily/` folder):
 
 ```text
-logs/
+/                        # Detected Vault Root
 ├── daily/               # Raw daily session logs (YYYY-MM-DD.md)
+├── deep-thoughts/       # Deep thoughts criteria and meta-log
+├── reports/             # Generated summaries and reports
 └── knowledge/           # Compiled knowledge base
     ├── index.md         # Master Index (catalog)
     ├── log.md           # Compilation history
@@ -54,6 +50,15 @@ logs/
     │   └── index.md     # Category index
     └── archive/         # Stale knowledge (archived after 6 months)
 ```
+
+---
+
+## 🏗 Technical Excellence
+- **In-Session LLM Execution**: Uses the active agent session for extractions/compilations, reducing latency.
+- **Concurrency Protection**: Uses `withFileMutationQueue` to ensure safe, serialized writes.
+- **Dynamic Discovery**: Automatically identifies the project root by searching for a `daily/` sentinel (up to 6 levels up). No dependency on `CLAUDE.md`.
+- **Relative Pathing**: All paths used by the extension are resolved relative to the vault root, ensuring portability and robustness.
+- **Persistent State**: Stores session metadata directly in the session file via `pi.appendEntry`.
 
 ---
 

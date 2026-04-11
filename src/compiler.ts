@@ -6,27 +6,39 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
  * compiler.ts — Knowledge base compilation module.
  *
  * Lists available daily logs and triggers the LLM via pi.sendUserMessage()
- * to compile them into structured knowledge articles under logs/knowledge/.
+ * to compile them into structured knowledge articles under knowledge/.
  *
  * The agent is responsible for reading, creating, and updating the knowledge
  * articles using its built-in file tools. This module just builds the prompt
  * and delivers it.
  *
+ *
  * No subprocess calls. No standalone CLI. Pure ExtensionAPI.
  */
+
+/**
+ * Configuration for directory names relative to the vault root.
+ */
+const RELATIVE_PATHS = {
+  VAULT_ROOT: "knowledge-base",
+  DAILY: "daily",
+  KNOWLEDGE: "knowledge",
+  DEEP_THOUGHTS: "deep-thoughts",
+  REPORTS: "reports",
+};
 
 /**
  * Parses logs/knowledge/log.md to determine which daily logs have already
  * been successfully compiled into the knowledge base.
  */
 function getCompiledSources(vaultRoot: string): Set<string> {
-  const logPath = path.join(vaultRoot, "logs", "knowledge", "log.md");
+  const logPath = path.join(vaultRoot, RELATIVE_PATHS.KNOWLEDGE, "log.md");
   const compiled = new Set<string>();
 
   if (!fs.existsSync(logPath)) return compiled;
 
   const content = fs.readFileSync(logPath, "utf-8");
-  // Match lines like "- Source: logs/daily/2026-04-09.md" or "- Sources: logs/daily/A.md, logs/daily/B.md"
+  // Match lines like "- Source: daily/2026-04-09.md" or "- Sources: daily/A.md, daily/B.md"
   const sourceLines = content.matchAll(/^- Sources?: (.*)$/gm);
 
   for (const match of sourceLines) {
@@ -46,15 +58,15 @@ function getCompiledSources(vaultRoot: string): Set<string> {
  * Build the compilation prompt for the LLM.
  */
 function buildCompilationPrompt(vaultRoot: string, dailyLogs: string[]): string {
-  const logList = dailyLogs.map((l) => `- logs/daily/${l}`).join("\n");
+  const logList = dailyLogs.map((l) => `- ${RELATIVE_PATHS.DAILY}/${l}`).join("\n");
 
-  return `You are a knowledge base compiler for the ITW Song-Sketches vault.
+  return `You are a knowledge base compiler for the project vault.
 
-**Your task:** Process the daily session logs listed below and update the knowledge base at \`logs/knowledge/\`.
+**Your task:** Process the daily session logs listed below and update the knowledge base at \`${RELATIVE_PATHS.KNOWLEDGE}/\`.
 
 **Knowledge Base Schema & Article Types:**
 
-### 1. Concept Article (\`logs/knowledge/concepts/<slug>.md\`)
+### 1. Concept Article (\`${RELATIVE_PATHS.KNOWLEDGE}/concepts/<slug>.md\`)
 A concept article covers one topic thoroughly (techniques, devices, theory, workflow, or project decisions).
 - **Frontmatter**:
 \`\`\`yaml
@@ -75,7 +87,7 @@ wikilinks: []        # other articles this one links to
   4. **Connections** — [[wikilinks]] to related articles (minimum 2)
   5. **Sources** — list of session dates that contributed this knowledge
 
-### 2. Connection Article (\`logs/knowledge/connections/<slug>.md\`)
+### 2. Connection Article (\`${RELATIVE_PATHS.KNOWLEDGE}/connections/<slug>.md\`)
 Documents how two or more concepts relate or interact.
 - **Frontmatter**:
 \`\`\`yaml
@@ -94,7 +106,7 @@ sources: []
   3. **Practical Implications** — how this connection affects production decisions
   4. **See Also** — [[wikilinks]] to the parent concept articles
 
-### 3. Q&A Article (\`logs/knowledge/qa/<slug>.md\`)
+### 3. Q&A Article (\`${RELATIVE_PATHS.KNOWLEDGE}/qa/<slug>.md\`)
 Captures explicit questions and answers from sessions.
 - **Frontmatter**:
 \`\`\`yaml
@@ -111,27 +123,25 @@ sources: []
   2. **Answer** — full answer with supporting detail
   3. **Related** — [[wikilinks]] to relevant concept articles
 
-### 4. Hierarchical Indexing
-Maintain multiple index files to ensure the knowledge base scales:
-- \`logs/knowledge/index.md\`: Master catalog (Master Index).
-- \`logs/knowledge/concepts/index.md\`: Specific index for concepts.
-- \`logs/knowledge/connections/index.md\`: Specific index for connections.
-- \`logs/knowledge/qa/index.md\`: Specific index for Q&A.
-Always update BOTH the master index and the relevant category index when an article is created or updated.
+### 4. Mermaid Knowledge Graph
+Maintain a visual representation of connections in \`${RELATIVE_PATHS.KNOWLEDGE}/connections/graph.mmd\`.
+- **Syntax**: Mermaid \`graph TD\`
+- **Content**: Use nodes for concept slugs and edges to represent relationships (e.g., \`[[slug1]] --> [[slug2]]\`).
+- **Update Rule**: Re-generate or update this file every time a compilation run occurs by scanning existing articles and wikilinks.
 
 ### 5. Archiving Stale Knowledge
 - **Threshold**: **6 months** (based on frontmatter \`date\`).
-- **Logic**: If an article is older than 6 months and describes a temporary workflow, old debug session, or superseded version, move it from its category folder to \`logs/knowledge/archive/\`.
+- **Logic**: If an article is older than 6 months and describes a temporary workflow, old debug session, or superseded version, move it from its category folder to \`${RELATIVE_PATHS.KNOWLEDGE}/archive/\`.
 - **Reference**: Update all indexes to reflect the move. Do NOT delete the article; just move it.
 
 **Compilation Rules:**
 1. **Deduplication**: If an existing article covers the knowledge, update it with new detail rather than creating a duplicate.
 2. **Substance**: Focus on decisions made, techniques learned, hardware behaviors discovered, theory applied, and project context.
 3. **Standards**: Every article needs at least 200 words and 2 [[wikilinks]] to other articles.
-4. **Log**: Always append a compilation entry to \`logs/knowledge/log.md\` in this format:
+4. **Log**: Always append a compilation entry to \`${RELATIVE_PATHS.KNOWLEDGE}/log.md\` in this format:
    \`\`\`
    ## YYYY-MM-DD HH:MM — Compilation Run
-   - Source: logs/daily/YYYY-MM-DD.md
+   - Source: ${RELATIVE_PATHS.DAILY}/YYYY-MM-DD.md
    - Created: [list of new article slugs, or "none"]
    - Updated: [list of updated article slugs, or "none"]
    - Archived: [list of archived article slugs, or "none"]
@@ -155,7 +165,7 @@ export async function runCompilation(
   vaultRoot: string,
   force: boolean = false
 ): Promise<void> {
-  const dailyDir = path.join(vaultRoot, "logs", "daily");
+  const dailyDir = path.join(vaultRoot, RELATIVE_PATHS.DAILY);
 
   if (!fs.existsSync(dailyDir)) {
     ctx.ui.notify("[Memory Compiler] No daily logs directory found — nothing to compile.", "info");
@@ -203,13 +213,9 @@ export async function runCompilation(
   );
 
   // deliverAs: "followUp" — waits for agent to fully finish any current task
-  // before delivering this prompt. This is important if called after extraction.
-  try {
-    pi.sendUserMessage(
-      `[Memory Compiler]\n\n${prompt}`,
-      { deliverAs: "followUp" }
-    );
-  } catch {
-    pi.sendUserMessage(`[Memory Compiler]\n\n${prompt}`);
-  }
+  // before delivering this prompt.
+  pi.sendUserMessage(
+    `[Memory Compiler]\n\n${prompt}`,
+    { deliverAs: "followUp" }
+  );
 }
