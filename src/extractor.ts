@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { PiMemoryConfig } from "./config.js";
@@ -18,12 +19,39 @@ function getCriteriaPath(): string {
 }
 
 /**
+ * Helper to get truncated text from a message's content parts.
+ * Prevents massive string allocations for huge tool results.
+ */
+function getMessageTextTruncated(content: any, max: number): string {
+  if (typeof content === "string") {
+    return content.length > max ? content.slice(0, max) + "… [truncated]" : content;
+  }
+  if (Array.isArray(content)) {
+    let result = "";
+    for (const part of content) {
+      if (part.type === "text" && typeof part.text === "string") {
+        const remaining = max - result.length;
+        if (part.text.length > remaining) {
+          result += part.text.slice(0, remaining) + "… [truncated]";
+          return result;
+        }
+        result += part.text;
+      }
+    }
+    return result;
+  }
+  return "";
+}
+
+/**
  * Serialize the session branch to a compact, filtered transcript.
  * Includes user messages, assistant text, and condensed tool results.
  * Skips raw tool call arguments and internal extension messages.
  */
-function serializeTranscript(ctx: ExtensionContext): string {
-  const entries = ctx.sessionManager.getBranch();
+export function serializeTranscript(ctx: ExtensionContext): string {
+  const allEntries = ctx.sessionManager.getBranch();
+  // Cap history processing to the last 200 entries to ensure responsiveness
+  const entries = allEntries.length > 200 ? allEntries.slice(-200) : allEntries;
   const lines: string[] = [];
 
   for (const entry of entries) {
@@ -33,21 +61,14 @@ function serializeTranscript(ctx: ExtensionContext): string {
     if (msg.role === "user") {
       // Skip extension-injected context messages (they have a customType)
       if ((msg as any).customType) continue;
-      const text = Array.isArray(msg.content)
-        ? msg.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")
-        : String(msg.content);
+      const text = getMessageTextTruncated(msg.content, 2000);
       if (text.trim()) lines.push(`USER: ${text.trim()}`);
     } else if (msg.role === "assistant") {
-      const text = Array.isArray(msg.content)
-        ? msg.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")
-        : String(msg.content);
+      const text = getMessageTextTruncated(msg.content, 2000);
       if (text.trim()) lines.push(`ASSISTANT: ${text.trim()}`);
     } else if (msg.role === "toolResult") {
-      // Condense tool results to first 300 chars
-      const resultText = Array.isArray(msg.content)
-        ? msg.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")
-        : String(msg.content ?? "");
-      const preview = resultText.length > 300 ? resultText.slice(0, 300) + "… [truncated]" : resultText;
+      // Condense tool results to 500 chars max
+      const preview = getMessageTextTruncated(msg.content, 500);
       if (preview.trim()) {
         lines.push(`TOOL(${(msg as any).toolName ?? "unknown"}): ${preview.trim()}`);
       }
@@ -127,23 +148,58 @@ export async function runExtraction(
   ctx: ExtensionContext,
   vaultRoot: string,
   config: PiMemoryConfig,
-  triggerEvent: string
+  triggerEvent: string,
+  providedTranscript?: string
 ): Promise<void> {
-  const transcript = serializeTranscript(ctx);
+  const transcript = providedTranscript ?? serializeTranscript(ctx);
 
   if (!transcript.trim()) {
     return; // Nothing to extract
   }
 
+  // If this is triggered by a lifecycle event (compaction/shutdown),
+  // we must escape the current turn and wait for the agent to be idle
+  // to avoid "Agent is already processing a prompt" errors.
+  const isLifecycleEvent = triggerEvent === "pre_compact" || triggerEvent === "shutdown";
+
+  if (isLifecycleEvent) {
+    // Escape the hook's execution context
+    setTimeout(async () => {
+      try {
+        await ctx.waitForIdle();
+        await executeExtraction(pi, ctx, vaultRoot, config, triggerEvent, transcript);
+      } catch (err) {
+        console.error(`[Memory Extractor] Delayed extraction failed: ${err}`);
+      }
+    }, 100);
+    return;
+  }
+
+  await executeExtraction(pi, ctx, vaultRoot, config, triggerEvent, transcript);
+}
+
+/**
+ * Internal helper to build prompt and send the message.
+ */
+async function executeExtraction(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  vaultRoot: string,
+  config: PiMemoryConfig,
+  triggerEvent: string,
+  transcript: string
+): Promise<void> {
   let deepThoughtsCriteria = "";
   const criteriaPath = getCriteriaPath();
-  if (fs.existsSync(criteriaPath)) {
-    deepThoughtsCriteria = fs.readFileSync(criteriaPath, "utf-8");
+  try {
+    deepThoughtsCriteria = await fsPromises.readFile(criteriaPath, "utf-8");
+  } catch {
+    // Ignore if file doesn't exist
   }
 
   const prompt = buildExtractionPrompt(ctx.cwd, vaultRoot, config, transcript, deepThoughtsCriteria);
 
-  pi.sendUserMessage(
+  await pi.sendUserMessage(
     `[Memory Extractor — triggered by: ${triggerEvent}]\n\n${prompt}`,
     { deliverAs: "followUp" }
   );

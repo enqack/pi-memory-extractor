@@ -1,11 +1,27 @@
 import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { runExtraction } from "./extractor.js";
+import { runExtraction, serializeTranscript } from "./extractor.js";
 import { runCompilation } from "./compiler.js";
 import { getResolvedConfig, PiMemoryConfig } from "./config.js";
 import { TODAY, findVaultRoot } from "./utils.js";
+
+const IGNORED_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "out",
+  "target",
+  "temp",
+  "tmp",
+  ".pi",
+  ".svelte-kit",
+  ".next",
+  ".cache",
+]);
 
 /**
  * pi-memory-extractor — Sessions knowledge extraction & compilation.
@@ -27,8 +43,9 @@ async function buildSessionContext(
   const parts: string[] = [];
 
   // --- 1. Knowledge Index ---
-  if (fs.existsSync(knowledgeIndexPath)) {
-    const lines = fs.readFileSync(knowledgeIndexPath, "utf-8").trim().split("\n");
+  try {
+    const content = await fsPromises.readFile(knowledgeIndexPath, "utf-8");
+    const lines = content.trim().split("\n");
     // Truncate to first 5 + last 15 lines if long
     const recentLines =
       lines.length > 50
@@ -36,40 +53,58 @@ async function buildSessionContext(
         : lines;
 
     parts.push(`## Knowledge Base Index (Recent entries)\n${recentLines.join("\n")}\n\n---\nIf you need to find more specific topics, use the 'search_knowledge' tool.\nTo read a full article, use 'read_knowledge_article(slug)'.`);
+  } catch {
+    // Ignore if file doesn't exist or can't be read
   }
 
   // --- 2. Today's Daily Log ---
-  if (fs.existsSync(todayLogPath)) {
-    const content = fs.readFileSync(todayLogPath, "utf-8").trim();
-    if (content) {
-      parts.push(`## Today's Session Log (${TODAY()})\n\n${content}`);
+  try {
+    const content = await fsPromises.readFile(todayLogPath, "utf-8");
+    if (content.trim()) {
+      parts.push(`## Today's Session Log (${TODAY()})\n\n${content.trim()}`);
     }
+  } catch {
+    // Ignore
   }
 
   // --- 3. Semantic Context Injection ---
   // Scan workspace for .md or .ts files and find related knowledge.
   try {
     const workspaceFiles: string[] = [];
-    const scanDir = (dir: string) => {
-      if (!fs.existsSync(dir)) return;
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+    
+    async function scanDir(dir: string, depth = 0) {
+      if (depth > 5) return; // Limit depth to avoid massive scans
+      
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = await fsPromises.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
       for (const entry of entries) {
+        if (IGNORED_DIRS.has(entry.name) || entry.name === config.VAULT_ROOT) {
+          continue;
+        }
+
         const res = path.resolve(dir, entry.name);
         if (entry.isDirectory()) {
-          if (![config.VAULT_ROOT, "node_modules", ".git"].includes(entry.name)) {
-            scanDir(res);
-          }
+          await scanDir(res, depth + 1);
         } else if (entry.name.endsWith(".md") || entry.name.endsWith(".ts")) {
           workspaceFiles.push(res);
         }
+        
+        // Safety cap: don't process more than 200 files
+        if (workspaceFiles.length >= 200) return;
       }
-    };
-    scanDir(ctx.cwd);
+    }
+
+    await scanDir(ctx.cwd);
 
     const indexPath = path.join(vaultRoot, config.KNOWLEDGE, "index.md");
     let indexContent = "";
     if (fs.existsSync(indexPath)) {
-      indexContent = fs.readFileSync(indexPath, "utf-8").toLowerCase();
+      indexContent = (await fsPromises.readFile(indexPath, "utf-8")).toLowerCase();
     }
 
     if (workspaceFiles.length > 0) {
@@ -163,7 +198,8 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
     ctx.ui.notify("[Memory Extractor] Capturing knowledge before compaction…", "info");
 
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact").catch((err) => {
+    const transcript = serializeTranscript(ctx);
+    runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact", transcript).catch((err) => {
       ctx.ui.notify(`[Memory Extractor] Extraction error: ${(err as Error).message}`, "error");
     });
 
@@ -180,7 +216,8 @@ export default function (pi: ExtensionAPI) {
     const r = ensureResolved(ctx.cwd);
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
 
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end").catch(() => {
+    const transcript = serializeTranscript(ctx);
+    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end", transcript).catch(() => {
       // Silently ignore on shutdown — process may exit before this resolves
     });
 
