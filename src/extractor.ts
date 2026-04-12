@@ -1,7 +1,13 @@
 import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionEntry,
+  SessionHeader,
+} from "@mariozechner/pi-coding-agent";
+import { parseSessionEntries, migrateSessionEntries } from "@mariozechner/pi-coding-agent";
 import { PiMemoryConfig } from "./config.js";
 import { TODAY } from "./utils.js";
 
@@ -48,13 +54,12 @@ function getMessageTextTruncated(content: any, max: number): string {
  * Includes user messages, assistant text, and condensed tool results.
  * Skips raw tool call arguments and internal extension messages.
  */
-export function serializeTranscript(ctx: ExtensionContext): string {
-  const allEntries = ctx.sessionManager.getBranch();
+export function serializeTranscript(entries: SessionEntry[]): string {
   // Cap history processing to the last 200 entries to ensure responsiveness
-  const entries = allEntries.length > 200 ? allEntries.slice(-200) : allEntries;
+  const history = entries.length > 200 ? entries.slice(-200) : entries;
   const lines: string[] = [];
 
-  for (const entry of entries) {
+  for (const entry of history) {
     if (entry.type !== "message") continue;
     const msg = entry.message;
 
@@ -79,6 +84,47 @@ export function serializeTranscript(ctx: ExtensionContext): string {
 }
 
 /**
+ * Serialize ALL historical sessions for the current project.
+ */
+export async function serializeDeepTranscript(ctx: ExtensionContext): Promise<string> {
+  const sessionDir = ctx.sessionManager.getSessionDir();
+  let files: string[] = [];
+  try {
+    files = (await fsPromises.readdir(sessionDir)).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return ""; // No sessions found
+  }
+
+  const allTranscripts: string[] = [];
+
+  for (const file of files) {
+    const filePath = path.join(sessionDir, file);
+    try {
+      const content = await fsPromises.readFile(filePath, "utf-8");
+      const allEntries = parseSessionEntries(content);
+      migrateSessionEntries(allEntries);
+
+      // Header is the first entry
+      const header = allEntries[0] as SessionHeader;
+      const sessionDate = new Date(header.timestamp).toLocaleString();
+
+      // Filter out the header before serializing transcript
+      const sessionEntries = allEntries.filter((e) => e.type !== "session") as SessionEntry[];
+      const transcript = serializeTranscript(sessionEntries);
+
+      if (transcript.trim()) {
+        allTranscripts.push(`### Session ${header.id} (${sessionDate})\n\n${transcript}`);
+      }
+    } catch (err) {
+      console.error(`[Memory Extractor] Failed to parse session ${file}: ${err}`);
+      continue;
+    }
+  }
+
+  return allTranscripts.join("\n\n---\n\n");
+}
+
+/**
  * Build the extraction prompt for the LLM.
  */
 function buildExtractionPrompt(
@@ -89,49 +135,35 @@ function buildExtractionPrompt(
   deepThoughtsCriteria: string
 ): string {
   const today = TODAY();
-  const dailyLogRelPath = path.relative(projectRoot, path.join(vaultRoot, config.DAILY, `${today}.md`));
+  const dailyLogPath = path.join(vaultRoot, config.DAILY, `${today}.md`);
+  const dailyLogRelPath = path.relative(projectRoot, dailyLogPath);
 
-  return `You are a knowledge extractor reviewing a Pi agent session transcript.
+  return `**CRITICAL: YOU MUST EXECUTE REAL TOOL CALLS.**
+DO NOT just print text describing your plan. You MUST call the \`write\` or \`edit\` tool to update the daily log. If you do not execute the file operation, you have failed the task.
 
-Your job: identify and summarize what is worth remembering from this conversation for future sessions.
+**Context:**
+- Project Root: \`${projectRoot}\`
+- Daily Log (Absolute): \`${dailyLogPath}\`
+- Daily Log (Relative): \`${dailyLogRelPath}\`
+
+Your job: identify and summarize what is worth remembering from this conversation and append it to the daily log at \`${dailyLogPath}\`.
 
 **Save to the daily log if the conversation contains:**
-- Important decisions, discoveries, or context changes
-- Significant technical findings, hardware behaviors discovered, or theory applied
-- Workflow improvements or production techniques learned
-- Key information that would be useful for future sessions of this project
+1. **Decisions**: Design choices, changed requirements, or confirmed plans.
+2. **Key Findings**: Bug root causes, successful techniques, or learned patterns.
+3. **Draft Documentation**: Explanations or code snippets that should move to the vault later.
+4. **Deep Thoughts**: Abstract or theoretical insights that meet these criteria: ${deepThoughtsCriteria}
 
-**Skip entirely if the conversation only contains:**
-- Routine file reads with no decisions
-- Simple back-and-forth clarifications
-- Tool calls that produced no new knowledge
-- Trivial exchanges (greetings, formatting fixes)
+**Submission Rules:**
+1. **Append Only**: Use the \`edit\` or \`write\` tool to add a new section for this session. Use the ABSOLUTE path: \`${dailyLogPath}\`.
+2. **Structure**: 
+   ### Session Knowledge — ${today}
+   - **Decisions**: ...
+   - **Key Findings & Learnings**: ...
+   - **Deep Thoughts**: ...
+3. **No Chatting**: DO NOT just output the summary in the chat. You MUST execute the tool call to save it to \`${dailyLogPath}\`.
 
-**Output format:**
-If there is nothing worth saving, respond with exactly: FLUSH_OK
-
-Otherwise, respond with a structured markdown summary and **immediately append it** to the file at:
-\`${dailyLogRelPath}\`
-
-Use the Write or Edit tool to append. If the file does not exist, create it. If it already has content, add a separator \`---\` before your new entry.
-
-The summary format to append:
-
-## Session Knowledge — ${today}
-
-### Decisions
-- (bullet list of decisions made, or omit section if none)
-
-### Key Findings & Learnings
-- (bullet list of discoveries or technical learnings, or omit section if none)
-
-### Workflow & Project Context
-- (notes on project progress or context changes, or omit section if none)
-
-### Context
-(1–2 sentences summarizing what this session was about)
-
-${deepThoughtsCriteria ? `---\n\n${deepThoughtsCriteria}` : ""}
+BEGIN by identifying the knowledge from the transcript below and then calling the \`edit\` or \`write\` tool.
 
 ---
 
@@ -149,9 +181,18 @@ export async function runExtraction(
   vaultRoot: string,
   config: PiMemoryConfig,
   triggerEvent: string,
-  providedTranscript?: string
+  providedTranscript?: string,
+  deep?: boolean,
+  state?: { isCompacting: boolean }
 ): Promise<void> {
-  const transcript = providedTranscript ?? serializeTranscript(ctx);
+  let transcript: string;
+  if (providedTranscript) {
+    transcript = providedTranscript;
+  } else if (deep) {
+    transcript = await serializeDeepTranscript(ctx);
+  } else {
+    transcript = serializeTranscript(ctx.sessionManager.getBranch());
+  }
 
   if (!transcript.trim()) {
     return; // Nothing to extract
@@ -161,12 +202,20 @@ export async function runExtraction(
   // we must escape the current turn and wait for the agent to be idle
   // to avoid "Agent is already processing a prompt" errors.
   const isLifecycleEvent = triggerEvent === "pre_compact" || triggerEvent === "shutdown";
-
   if (isLifecycleEvent) {
     // Escape the hook's execution context
     setTimeout(async () => {
       try {
-        await ctx.waitForIdle();
+        // Defensive wait: check if native waitForIdle is available (it's only in CommandContext)
+        // otherwise poll isIdle()
+        if (typeof (ctx as any).waitForIdle === "function") {
+          await (ctx as any).waitForIdle();
+        }
+        
+        // Polling loop: wait while agent is streaming OR in a critical lifecycle phase (compaction)
+        while (!ctx.isIdle() || state?.isCompacting) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
         await executeExtraction(pi, ctx, vaultRoot, config, triggerEvent, transcript);
       } catch (err) {
         console.error(`[Memory Extractor] Delayed extraction failed: ${err}`);

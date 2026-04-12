@@ -141,11 +141,17 @@ interface ExtractorState {
   lastExtractedEvent: string;
 }
 
+interface ExtensionState {
+  isCompacting: boolean;
+}
+
 // --- Extension factory ---
 
 export default function (pi: ExtensionAPI) {
   let vaultRoot: string | null = null;
   let config: PiMemoryConfig | null = null;
+
+  const state: ExtensionState = { isCompacting: false };
 
   // Helper to lazily ensure config + vaultRoot are resolved
   function ensureResolved(cwd: string): { vaultRoot: string; config: PiMemoryConfig } {
@@ -194,12 +200,12 @@ export default function (pi: ExtensionAPI) {
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (_event, ctx) => {
+    state.isCompacting = true;
     const r = ensureResolved(ctx.cwd);
-    ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
-    ctx.ui.notify("[Memory Extractor] Capturing knowledge before compaction…", "info");
+    ctx.ui.setStatus("memory-extractor", "🧠 MemEx: waiting for compaction…");
 
-    const transcript = serializeTranscript(ctx);
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact", transcript).catch((err) => {
+    const transcript = serializeTranscript(ctx.sessionManager.getBranch());
+    runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact", transcript, false, state).catch((err) => {
       ctx.ui.notify(`[Memory Extractor] Extraction error: ${(err as Error).message}`, "error");
     });
 
@@ -207,7 +213,11 @@ export default function (pi: ExtensionAPI) {
       lastExtractedAt: Date.now(),
       lastExtractedEvent: "pre_compact",
     } satisfies ExtractorState);
+  });
 
+  // --- session_compact ---
+  pi.on("session_compact", async (_event, ctx) => {
+    state.isCompacting = false;
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
   });
 
@@ -216,8 +226,8 @@ export default function (pi: ExtensionAPI) {
     const r = ensureResolved(ctx.cwd);
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
 
-    const transcript = serializeTranscript(ctx);
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end", transcript).catch(() => {
+    const transcript = serializeTranscript(ctx.sessionManager.getBranch());
+    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end", transcript, false, state).catch(() => {
       // Silently ignore on shutdown — process may exit before this resolves
     });
 
@@ -230,18 +240,19 @@ export default function (pi: ExtensionAPI) {
   // --- Command: /extract-knowledge ---
   pi.registerCommand("extract-knowledge", {
     description: "Manually trigger session knowledge extraction to the daily log",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       await ctx.waitForIdle();
       const r = ensureResolved(ctx.cwd);
 
-      ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
-      ctx.ui.notify("[Memory Extractor] Starting extraction…", "info");
+      const deep = /--deep/.test(args ?? "");
+      ctx.ui.setStatus("memory-extractor", `🧠 MemEx: extracting${deep ? " (deep)" : ""}…`);
+      ctx.ui.notify(`[Memory Extractor] Starting ${deep ? "deep " : ""}extraction…`, "info");
 
       try {
-        await runExtraction(pi, ctx, r.vaultRoot, r.config, "manual");
+        await runExtraction(pi, ctx, r.vaultRoot, r.config, "manual", undefined, deep, state);
         pi.appendEntry("memory-extractor-state", {
           lastExtractedAt: Date.now(),
-          lastExtractedEvent: "manual",
+          lastExtractedEvent: deep ? "manual_deep" : "manual",
         } satisfies ExtractorState);
         ctx.ui.notify("[Memory Extractor] Extraction prompt sent to agent.", "info");
       } catch (err) {
@@ -294,11 +305,16 @@ export default function (pi: ExtensionAPI) {
           description: "Optional reason or context for the extraction (e.g. 'checkpoint after refactor')",
         }),
       ),
+      deep: Type.Optional(
+        Type.Boolean({
+          description: "If true, scan ALL historical sessions for the current project for knowledge.",
+        }),
+      ),
     }) as any,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
-      const label = params.reason ?? "llm_requested";
-      await runExtraction(pi, ctx, r.vaultRoot, r.config, label);
+      const label = params.reason ?? (params.deep ? "llm_requested_deep" : "llm_requested");
+      await runExtraction(pi, ctx, r.vaultRoot, r.config, label, undefined, !!params.deep, state);
 
       pi.appendEntry("memory-extractor-state", {
         lastExtractedAt: Date.now(),
