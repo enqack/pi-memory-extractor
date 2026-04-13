@@ -3,7 +3,10 @@ import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { runExtraction, serializeTranscript } from "./extractor.js";
+import { StringEnum } from "@mariozechner/pi-ai";
+import { Text, Container, Spacer, Markdown, Box } from "@mariozechner/pi-tui";
+import { getMarkdownTheme, DynamicBorder, isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import { serializeTranscript, serializeDeepTranscript } from "./extractor.js";
 import { runCompilation } from "./compiler.js";
 import { getResolvedConfig, PiMemoryConfig, ensureVaultStructure } from "./config.js";
 import {
@@ -13,6 +16,7 @@ import {
   getArticleSummary,
 } from "./utils.js";
 import { getArticlesToArchive, archiveArticles } from "./archiver.js";
+import { MemoryOrchestrator } from "./orchestrator.js";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -126,8 +130,8 @@ async function buildSessionContext(
         if (topMatches.length > 0) {
           parts.push(`## Active Memories (Surgically Recalled)`);
           for (const match of topMatches) {
-            // Try to find the file in concepts, connections, or qa
-            const categories = ["concepts", "connections", "qa"];
+            // Try to find the file in concepts, connections, qa, lessons-learned, or cursed-knowledge
+            const categories = ["concepts", "connections", "qa", "lessons-learned", "cursed-knowledge"];
             let foundSummary = false;
             
             for (const cat of categories) {
@@ -157,17 +161,39 @@ async function buildSessionContext(
   return `[Memory Extractor — Session Context]\n\n${parts.join("\n\n---\n\n")}`;
 }
 
-// --- State helpers ---
-
-interface ExtractorState {
-  lastExtractedAt: number;
-  lastExtractedEvent: string;
+/**
+ * Strips leading thinking/whitespace to ensure YAML starts at line 0.
+ */
+function repairObsidianContent(text: string): string {
+  const firstFrontmatterIndex = text.indexOf("---\n");
+  if (firstFrontmatterIndex > 0) {
+    const leadingText = text.substring(0, firstFrontmatterIndex).trim();
+    // Only strip if the leading text looks like accidental LLM chatter
+    // (doesn't contain other markdown headings, etc.)
+    if (leadingText.length < 1000 && !leadingText.includes("# ")) {
+      return text.substring(firstFrontmatterIndex);
+    }
+  }
+  return text;
 }
 
-interface ExtensionState {
-  isCompacting: boolean;
-  pendingExtractionTranscript: string | null;
-  lastExtractionAt: number;
+/**
+ * Ensures wikilinks in frontmatter are quoted.
+ */
+function quoteWikilinks(content: string): string {
+  const frontmatterMatch = content.match(/^---\n([\s\S]+?)\n---\n/);
+  if (!frontmatterMatch) return content;
+
+  let fm = frontmatterMatch[1];
+  const lines = fm.split("\n");
+  const fixedLines = lines.map(line => {
+    // Ensure all [[wikilinks]] are wrapped in double quotes.
+    // Handles [[link]], "[[link]]", [[link]]", etc.
+    return line.replace(/"?(\[\[.*?\]\])"?/g, '"$1"');
+  });
+
+  const newFm = fixedLines.join("\n");
+  return content.replace(frontmatterMatch[1], newFm);
 }
 
 // --- Extension factory ---
@@ -175,47 +201,79 @@ interface ExtensionState {
 export default function (pi: ExtensionAPI) {
   let vaultRoot: string | null = null;
   let config: PiMemoryConfig | null = null;
-
-  const state: ExtensionState = {
-    isCompacting: false,
-    pendingExtractionTranscript: null,
-    lastExtractionAt: 0,
-  };
+  const orchestrator = new MemoryOrchestrator(pi);
 
   // Helper to lazily ensure config + vaultRoot are resolved
   function ensureResolved(cwd: string): { vaultRoot: string; config: PiMemoryConfig } {
     if (!config) config = getResolvedConfig(cwd);
     if (!vaultRoot) vaultRoot = findVaultRoot(cwd, config);
+  orchestrator.setContext(vaultRoot, config);
     return { vaultRoot, config };
   }
 
-  // --- session_start ---
-  pi.on("session_start", async (event, ctx) => {
-    // Resolve config and vault root fresh each session
-    config = getResolvedConfig(ctx.cwd);
-    vaultRoot = findVaultRoot(ctx.cwd, config);
+  // --- Frontmatter Enforcement & Repair ---
+  pi.on("tool_call", async (event, ctx) => {
+    if (isToolCallEventType("write", event)) {
+      const { path: filePath } = event.input;
+      let { content } = event.input;
 
-    // Ensure vault structure exists
-    const created = ensureVaultStructure(vaultRoot, config);
-    if (created) {
-      ctx.ui.notify("[Memory Extractor] Initialized new knowledge vault structure.", "info");
-    }
+      if (filePath.endsWith(".md") && filePath.includes("knowledge/")) {
+        // 1. Repair leading thoughts
+        const repaired = repairObsidianContent(content);
+        if (repaired !== content) {
+          content = repaired;
+          event.input.content = content;
+        }
 
-    // Restore last-run state from session entries
-    const entries = ctx.sessionManager.getEntries();
-    for (const entry of entries) {
-      if (entry.type === "custom" && (entry as any).customType === "memory-extractor-state") {
-        const data = (entry as any).data as ExtractorState;
-        if (data?.lastExtractedAt) {
-          ctx.ui.setStatus(
-            "memory-extractor",
-            `🧠 MemEx: last extracted: ${new Date(data.lastExtractedAt).toLocaleTimeString()}`,
-          );
+        // 2. Quote wikilinks
+        const quoted = quoteWikilinks(content);
+        if (quoted !== content) {
+          content = quoted;
+          event.input.content = content;
+        }
+
+        // 3. Final check
+        if (!content.startsWith("---\n")) {
+          return {
+            block: true,
+            reason: `Rejected: Markdown file "${filePath}" must start with YAML frontmatter (---). Found: ${content.substring(0, 50).replace(/\n/g, "\\n")}...`,
+          };
         }
       }
     }
 
-    const contextMessage = await buildSessionContext(vaultRoot, config, ctx);
+    if (isToolCallEventType("edit", event)) {
+        const { path: filePath, edits } = event.input;
+        if (filePath.endsWith(".md") && filePath.includes("knowledge/")) {
+            for (const edit of edits) {
+                // If the edit is likely touching the frontmatter (line 0 or contains ---)
+                if (edit.newText.includes("---") || edit.oldText === "" /* insertion at start? */) {
+                    edit.newText = quoteWikilinks(edit.newText);
+                }
+            }
+        }
+    }
+  });
+
+  // --- session_start ---
+  pi.on("session_start", async (event, ctx) => {
+    const r = ensureResolved(ctx.cwd);
+
+    // Ensure vault structure exists
+    const created = ensureVaultStructure(r.vaultRoot, r.config);
+    if (created) {
+      ctx.ui.notify("[Memory Extractor] Initialized new knowledge vault structure.", "info");
+    }
+
+    // Restore orchestrator state
+    await orchestrator.restoreState(ctx);
+    const state = orchestrator.getState();
+    if (state.step !== "idle") {
+      ctx.ui.setStatus("memory-extractor", `🧠 MemEx: ${state.step}...`);
+      ctx.ui.notify(`[Memory Extractor] Resuming knowledge extraction work (${state.step}).`, "info");
+    }
+
+    const contextMessage = await buildSessionContext(r.vaultRoot, r.config, ctx);
     if (contextMessage) {
       pi.sendMessage(
         {
@@ -230,96 +288,67 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("[Memory Extractor] No knowledge base or daily log found yet.", "info");
     }
 
-    ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
+    if (state.step === "idle") {
+      ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
+    }
+  });
+
+  // --- agent_end ---
+  pi.on("agent_end", async (event, ctx) => {
+    const state = orchestrator.getState();
+    // If we are in analysis or mapping, we advance automatically after the agent finishes its response
+    if (state.step === "analysis" || state.step === "mapping") {
+        await orchestrator.advanceWorkflow(ctx);
+    }
   });
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (_event, ctx) => {
-    state.isCompacting = true;
-    const r = ensureResolved(ctx.cwd);
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: waiting for compaction…");
-
-    // Capture the transcript BEFORE it is truncated by compaction
-    const transcript = serializeTranscript(ctx.sessionManager.getBranch());
-    if (transcript.trim()) {
-      state.pendingExtractionTranscript = transcript;
-    }
   });
 
   // --- session_compact ---
   pi.on("session_compact", async (_event, ctx) => {
-    state.isCompacting = false;
-    ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
-
-    // Trigger any pending extraction after compaction is finished and context is clean
-    if (state.pendingExtractionTranscript) {
-      // Anti-loop Guard: Don't trigger if we extracted in the last 5 minutes
-      const COOLDOWN_MS = 5 * 60 * 1000;
-      const now = Date.now();
-      if (now - state.lastExtractionAt < COOLDOWN_MS) {
-        ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle (cooldown)");
-        ctx.ui.notify("[Memory Extractor] Skipped auto-extraction: Cooling down from a recent session trigger.", "info");
-        state.pendingExtractionTranscript = null;
-        return;
-      }
-
-      state.lastExtractionAt = now;
-      const r = ensureResolved(ctx.cwd);
-      const transcript = state.pendingExtractionTranscript;
-      state.pendingExtractionTranscript = null;
-
-      runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact", transcript, false).catch((err) => {
-        ctx.ui.notify(`[Memory Extractor] Deferred extraction error: ${(err as Error).message}`, "error");
+    const r = ensureResolved(ctx.cwd);
+    const transcript = serializeTranscript(ctx.sessionManager.getBranch());
+    
+    if (transcript.trim()) {
+      orchestrator.startExtraction(ctx, "compaction", transcript, false).catch((err) => {
+        ctx.ui.notify(`[Memory Extractor] Orchestration error: ${(err as Error).message}`, "error");
       });
+    } else {
+      ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
     }
   });
 
   // --- session_shutdown ---
   pi.on("session_shutdown", async (_event, ctx) => {
     const r = ensureResolved(ctx.cwd);
-    ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
-
     const transcript = serializeTranscript(ctx.sessionManager.getBranch());
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end", transcript, false).catch(() => {
-      // Silently ignore on shutdown — process may exit before this resolves
-    });
-
-    pi.appendEntry("memory-extractor-state", {
-      lastExtractedAt: Date.now(),
-      lastExtractedEvent: "session_end",
-    } satisfies ExtractorState);
+    if (transcript.trim()) {
+      orchestrator.startExtraction(ctx, "shutdown", transcript, false).catch(() => {});
+    }
   });
 
   // --- Command: /extract-knowledge ---
   pi.registerCommand("extract-knowledge", {
-    description: "Manually trigger session knowledge extraction to the daily log",
+    description: "Manually trigger session knowledge extraction via Orchestrator",
     handler: async (args, ctx) => {
       await ctx.waitForIdle();
       const r = ensureResolved(ctx.cwd);
-
       const deep = /--deep/.test(args ?? "");
-      ctx.ui.setStatus("memory-extractor", `🧠 MemEx: extracting${deep ? " (deep)" : ""}…`);
-      ctx.ui.notify(`[Memory Extractor] Starting ${deep ? "deep " : ""}extraction…`, "info");
+      
+      const transcript = deep 
+        ? await serializeDeepTranscript(ctx)
+        : serializeTranscript(ctx.sessionManager.getBranch());
 
-      try {
-        const result = await runExtraction(pi, ctx, r.vaultRoot, r.config, "manual", undefined, deep);
-        
-        if (result === "sent") {
-          pi.appendEntry("memory-extractor-state", {
-            lastExtractedAt: Date.now(),
-            lastExtractedEvent: deep ? "manual_deep" : "manual",
-          } satisfies ExtractorState);
-          ctx.ui.notify("[Memory Extractor] Extraction prompt sent to agent.", "info");
-        } else if (result === "empty") {
-          ctx.ui.notify("[Memory Extractor] Nothing new to extract from this session history.", "info");
-        } else {
-          ctx.ui.notify("[Memory Extractor] Extraction failed to render or send.", "error");
-        }
-      } catch (err) {
-        ctx.ui.notify(`[Memory Extractor] Extraction failed: ${(err as Error).message}`, "error");
-      } finally {
-        ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
+      if (!transcript.trim()) {
+        ctx.ui.notify("[Memory Extractor] Nothing new to extract from this session context.", "info");
+        return;
       }
+
+      ctx.ui.notify(`[Memory Extractor] Starting ${deep ? "deep " : ""}orchestrated extraction…`, "info");
+      await orchestrator.startExtraction(ctx, "manual", transcript, deep);
     },
   });
 
@@ -329,7 +358,6 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       await ctx.waitForIdle();
       const r = ensureResolved(ctx.cwd);
-
       const force = /--force|-f/.test(args ?? "");
 
       ctx.ui.setStatus("memory-extractor", "🧠 MemEx: compiling…");
@@ -346,52 +374,86 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // --- Tool: extract_knowledge ---
+  // --- Tool: submit_knowledge_synthesis ---
+  pi.registerTool({
+    name: "submit_knowledge_synthesis",
+    label: "Submit Synthesized Knowledge",
+    description: "Submit the final JSON packet of synthesized knowledge from the 3-step extraction workflow.",
+    parameters: Type.Object({
+      knowledge_title: Type.String({ description: "Descriptive title for the knowledge packet" }),
+      source_summary: Type.String({ description: "Concise summary of learnings" }),
+      themes: Type.Array(Type.Object({
+        theme: Type.String(),
+        summary: Type.String()
+      })),
+      relationships: Type.Array(Type.Object({
+        entity_a: Type.String(),
+        relationship_type: Type.String(),
+        entity_b: Type.String(),
+        evidence_quote: Type.String()
+      })),
+      actionable_takeaways: Type.Array(Type.Object({
+        priority: StringEnum(["High", "Medium", "Low"] as const, { description: "High, Medium, or Low" }),
+        action: Type.String(),
+        owner: Type.String()
+      }))
+    }),
+    renderResult(result, { expanded }, theme) {
+      if (!expanded) {
+        return new Text(theme.fg("success", "✓ Knowledge synthesis received"), 0, 0);
+      }
+      const container = new Container();
+      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+      container.addChild(new Text(theme.fg("accent", theme.bold("🧠 Knowledge Synthesis Summary")), 1, 0));
+      container.addChild(new Spacer(1));
+      container.addChild(new Text(theme.fg("text", "The orchestrator has received the synthesis and is updating the vault."), 1, 0));
+      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+      return container;
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      ensureResolved(ctx.cwd);
+      await orchestrator.processStepResult(ctx, params);
+      return {
+        content: [{ type: "text", text: "Knowledge packet received and processed by Orchestrator." }],
+        details: { status: "received" },
+      };
+    },
+  });
+
+  // --- Tool: extract_knowledge (Triggers Orchestrator) ---
   pi.registerTool({
     name: "extract_knowledge",
     label: "Extract Session Knowledge",
-    description:
-      "Extract the current session's significant knowledge to the daily log " +
-      "in the 'daily/' folder. Use this when the conversation has reached a " +
-      "meaningful checkpoint and the learnings should be preserved.",
-    promptSnippet: "Save current session knowledge to the daily log",
-    promptGuidelines: [
-      "Use extract_knowledge when the user asks to save, log, or remember session learnings.",
-      "Use extract_knowledge before switching topics if significant work was done.",
-    ],
+    description: "Manually trigger the orchestrated knowledge extraction workflow.",
     parameters: Type.Object({
-      reason: Type.Optional(
-        Type.String({
-          description: "Optional reason or context for the extraction (e.g. 'checkpoint after refactor')",
-        }),
-      ),
-      deep: Type.Optional(
-        Type.Boolean({
-          description: "If true, scan ALL historical sessions for the current project for knowledge.",
-        }),
-      ),
-    }) as any,
-    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+      reason: Type.Optional(Type.String({ description: "Context for extraction" })),
+      deep: Type.Optional(Type.Boolean({ description: "Scan all historical sessions" })),
+    }),
+    renderResult(result: any, { expanded }, theme) {
+      const status = result.details?.status || "unknown";
+      if (status === "started") {
+        return new Text(theme.fg("success", "✓ Extraction workflow started"), 0, 0);
+      }
+      return new Text(theme.fg("warn", `Status: ${status}`), 0, 0);
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
-      const label = params.reason ?? (params.deep ? "llm_requested_deep" : "llm_requested");
-      
-      const result = await runExtraction(pi, ctx, r.vaultRoot, r.config, label, undefined, !!params.deep);
+      const transcript = params.deep
+        ? await serializeDeepTranscript(ctx)
+        : serializeTranscript(ctx.sessionManager.getBranch());
 
-      if (result === "sent") {
-        pi.appendEntry("memory-extractor-state", {
-          lastExtractedAt: Date.now(),
-          lastExtractedEvent: label,
-        } satisfies ExtractorState);
+      if (!transcript.trim()) {
         return {
-          content: [{ type: "text", text: "Extraction prompt queued. The agent will analyze the session and append findings to the daily log." }],
-          details: { triggeredBy: label, status: "sent" },
-        };
-      } else {
-        return {
-          content: [{ type: "text", text: result === "empty" ? "No significant new knowledge found to extract." : "Extraction failed." }],
-          details: { triggeredBy: label, status: result },
+          content: [{ type: "text", text: "No knowledge found to extract." }],
+          details: { status: "empty" },
         };
       }
+
+      await orchestrator.startExtraction(ctx, params.reason ?? "llm_requested", transcript, !!params.deep);
+      return {
+        content: [{ type: "text", text: "Orchestration workflow started." }],
+        details: { status: "started" },
+      };
     },
   });
 
@@ -399,138 +461,95 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "compile_knowledge",
     label: "Compile Knowledge Base",
-    description:
-      "Compile extracted daily session logs into structured, interconnected knowledge " +
-      "articles in the 'knowledge/' folder. Updates index.md and appends to log.md.",
-    promptSnippet: "Compile daily logs into the structured knowledge base",
-    promptGuidelines: [
-      "Use compile_knowledge when the user asks to update or compile the knowledge base.",
-      "Run compile_knowledge after a series of extract_knowledge calls to synthesize learnings.",
-    ],
+    description: "Compile daily logs into the structured knowledge base.",
     parameters: Type.Object({
-      force: Type.Optional(
-        Type.Boolean({
-          description: "If true, re-process all daily logs even if they have already been compiled.",
-        }),
-      ),
-    }) as any,
-    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+      force: Type.Optional(Type.Boolean()),
+    }),
+    renderResult(_result, _options, theme) {
+      return new Text(theme.fg("success", "✓ Compilation initiated"), 0, 0);
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
       await runCompilation(pi, ctx, r.vaultRoot, r.config, !!params.force);
-
       return {
-        content: [{ type: "text", text: "Compilation prompt queued. The agent will process daily logs and update the knowledge base." }],
+        content: [{ type: "text", text: "Compilation initiated." }],
         details: {},
       };
     },
   });
 
-  // --- Tool: cleanup_knowledge_vault ---
+  // --- Utility Tools (Search, Archive, etc.) ---
+
   pi.registerTool({
     name: "cleanup_knowledge_vault",
     label: "Cleanup Knowledge Vault",
-    description:
-      "Move articles older than 6 months from concepts/, connections/, and qa/ into the archive/ folder.",
-    promptSnippet: "Move old knowledge base articles to the archive",
-    parameters: Type.Object({}) as any,
-    async execute(_toolCallId, _params: any, _signal, _onUpdate, ctx) {
+    description: "Archive old knowledge articles.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
-      
       const toArchive = getArticlesToArchive(r.vaultRoot, r.config);
-      if (toArchive.length === 0) {
-        return {
-          content: [{ type: "text", text: "No articles older than 6 months found. Clean as a whistle!" }],
-          details: { found: 0 },
-        };
-      }
-
-      const archivedCount = archiveArticles(r.vaultRoot, r.config, toArchive);
-      
-      ctx.ui.notify(`[Memory Extractor] Archived ${archivedCount} old knowledge articles.`, "info");
-      
-      return {
-        content: [{ type: "text", text: `Successfully archived ${archivedCount} article(s).` }],
-        details: { archived: archivedCount, paths: toArchive },
-      };
+      if (toArchive.length === 0) return { content: [{ type: "text", text: "Nothing to archive." }] };
+      const count = archiveArticles(r.vaultRoot, r.config, toArchive);
+      return { content: [{ type: "text", text: `Archived ${count} articles.` }] };
     },
   });
 
-  // --- Tool: search_knowledge ---
   pi.registerTool({
     name: "search_knowledge",
     label: "Search Knowledge Base",
-    description: "Search the structured knowledge base for a specific keyword or query.",
-    parameters: Type.Object({
-      query: Type.String({ description: "Keyword or topic to search for" }),
-    }) as any,
-    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+    parameters: Type.Object({ query: Type.String() }),
+    renderResult(result: any, { expanded }, theme) {
+      const content = result.content?.[0]?.text || "";
+      if (!expanded) {
+        const matches = content.split("\n").filter(l => l.trim().length > 0);
+        return new Text(theme.fg("success", `Found ${matches.length} matches`), 0, 0);
+      }
+      const container = new Container();
+      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+      container.addChild(new Text(theme.fg("accent", theme.bold(`Search Results for "${result.details?.query || ""}"`)), 1, 0));
+      container.addChild(new Spacer(1));
+      container.addChild(new Markdown(content, 1, 0, getMarkdownTheme()));
+      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
+      return container;
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
-      const kbDir = path.join(r.vaultRoot, r.config.KNOWLEDGE);
-
-      if (!fs.existsSync(kbDir)) {
-        return {
-          content: [{ type: "text", text: "Knowledge base directory not found." }],
-          details: {},
-        };
-      }
-
-      const indexPath = path.join(kbDir, "index.md");
-      let results = "";
-
-      if (fs.existsSync(indexPath)) {
-        const indexContent = fs.readFileSync(indexPath, "utf-8");
-        const matches = indexContent
-          .split("\n")
-          .filter((line) => line.toLowerCase().includes(params.query.toLowerCase()));
-        if (matches.length > 0) {
-          results += `Matches in Index:\n${matches.join("\n")}\n\n`;
-        }
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              results ||
-              "No direct matches found in the index. Try a different keyword or check recent logs.",
-          },
-        ],
-        details: { query: params.query },
+      const indexPath = path.join(r.vaultRoot, r.config.KNOWLEDGE, "index.md");
+      if (!fs.existsSync(indexPath)) return { content: [{ type: "text", text: "No index found." }] };
+      const content = fs.readFileSync(indexPath, "utf-8");
+      const matches = content.split("\n").filter(l => l.toLowerCase().includes(params.query.toLowerCase()));
+      return { 
+        content: [{ type: "text", text: matches.join("\n") || "No matches." }],
+        details: { query: params.query }
       };
     },
   });
 
-  // --- Tool: read_knowledge_article ---
   pi.registerTool({
     name: "read_knowledge_article",
     label: "Read Knowledge Article",
-    description: "Read the full content of a specific knowledge article slug.",
-    parameters: Type.Object({
-      slug: Type.String({ description: "The slug of the article to read (e.g. 'm8-workflow')" }),
-    }) as any,
-    async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+    parameters: Type.Object({ slug: Type.String() }),
+    renderResult(result: any, { expanded }, theme) {
+      if (!expanded || result.status === "error") {
+        return new Text(result.content?.[0]?.text?.substring(0, 50) || "Not found", 0, 0);
+      }
+      const container = new Container();
+      const mdTheme = getMarkdownTheme();
+      const content = result.content?.[0]?.text || "";
+      container.addChild(new Markdown(content, 0, 0, mdTheme));
+      return container;
+    },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
       const kbDir = path.join(r.vaultRoot, r.config.KNOWLEDGE);
-
-      const categories = ["concepts", "connections", "qa", "archive"];
-      for (const cat of categories) {
-        const filePath = path.join(kbDir, cat, `${params.slug}.md`);
-        if (fs.existsSync(filePath)) {
-          return {
-            content: [{ type: "text", text: fs.readFileSync(filePath, "utf-8") }],
-            details: { slug: params.slug, category: cat },
-          };
-        }
+      const cats = ["concepts", "connections", "qa", "lessons-learned", "cursed-knowledge", "archive"];
+      for (const cat of cats) {
+        const p = path.join(kbDir, cat, `${params.slug}.md`);
+        if (fs.existsSync(p)) return { content: [{ type: "text", text: fs.readFileSync(p, "utf-8") }] };
       }
-
-      return {
-        content: [{ type: "text", text: `Article '${params.slug}' not found.` }],
-        details: { slug: params.slug, found: false },
-      };
+      return { content: [{ type: "text", text: "Not found." }] };
     },
   });
 
-  // --- Ready ---
-  console.log("[pi-memory-extractor] Extension loaded (v2.0.0 — ExtensionAPI native).");
+  console.log("[pi-memory-extractor] Extension loaded (Orchestrator Mode).");
 }

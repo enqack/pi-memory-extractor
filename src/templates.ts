@@ -14,6 +14,10 @@ function lintMarkdown(content: string): string {
     .trim() + "\n"; // Ensure exactly one newline at EOF
 }
 
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 /**
  * Loads all authoritative schemas from src/prompts/schemas/
  */

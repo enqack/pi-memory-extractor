@@ -11,7 +11,10 @@ import { getArticlesToArchive } from "./archiver.js";
 /**
  * Parses knowledge/log.md to find which daily logs have already been compiled.
  */
-function getCompiledSources(
+/**
+ * Parses knowledge/log.md to find which daily logs have already been compiled.
+ */
+export function getCompiledSources(
   vaultRoot: string,
   config: PiMemoryConfig,
 ): Set<string> {
@@ -33,7 +36,6 @@ function getCompiledSources(
 
   return compiled;
 }
-
 
 /**
  * Main compilation entry point.
@@ -117,26 +119,22 @@ export async function runCompilation(
       ctx.ui.notify(`[Memory Compiler] Found ${archiveList.length} articles for archiving.`, "info");
     }
 
-    // Stability: Wait for agent idle state before sending follow-up
-    setTimeout(async () => {
-      try {
-        while (!ctx.isIdle()) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-
-        await pi.sendUserMessage(prompt, {
-          deliverAs: "followUp",
-        });
-      } catch (err) {
-        console.error(`[Memory Compiler] Failed to trigger follow-up: ${err}`);
-        ctx.ui.notify(
-          "[Memory Compiler] Failed to trigger follow-up turn.",
-          "error",
-        );
-      }
-    }, 100);
+    // Trigger the agent to start processing. 
+    // We don't use waitForIdle() here to avoid deadlocks when called from tools.
+    try {
+      await pi.sendUserMessage(prompt, {
+        deliverAs: "followUp",
+      });
+    } catch (err) {
+      console.error(`[Memory Compiler] Failed to trigger follow-up: ${err}`);
+      ctx.ui.notify(
+        "[Memory Compiler] Failed to trigger follow-up turn.",
+        "error",
+      );
+    }
   } catch (err) {
     console.error(`[Memory Compiler] Failed to render template: ${err}`);
     ctx.ui.notify("[Memory Compiler] Failed to render compilation prompt.", "error");
   }
 }
+

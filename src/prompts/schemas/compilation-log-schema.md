@@ -2,7 +2,17 @@
 
 This contract defines the format for entries in the append-only `knowledge/log.md`.
 
-## 1. Entry Header
+## 1. Frontmatter
+The log file MUST start with the following YAML frontmatter at **LINE 1**.
+
+```yaml
+---
+title: Knowledge Base Compilation Log
+type: log
+---
+```
+
+## 2. Entry Header
 Each compilation run MUST be recorded as a Level 2 header with a timestamp.
 
 ```markdown

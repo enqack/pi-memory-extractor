@@ -3,21 +3,28 @@
 This contract defines the strict structure for all Knowledge Base articles managed by the Pi Memory Extractor.
 
 ## 1. Frontmatter Contract
-Every article MUST contain the following YAML frontmatter.
+Every article MUST contain the following YAML frontmatter starting at **LINE 1** (ABSOLUTE TOP) of the file. No text, thought blocks, or whitespace is allowed before the opening `---`.
 
 ```yaml
 ---
 title: "[Short, Descriptive Title]"
-type: concept | connection | qa
-maturity: seed | developing | stable
-revision: [Integer starting at 1]
-category: [Architecture | Logic | UI | Hardware | Workflow]
-tags: [tag1, tag2]
+type: concept # concept | connection | qa
+maturity: seed # seed | developing | stable
+revision: 1
+category: Architecture # Architecture | Logic | UI | Hardware | Workflow
+tags:
+  - tag1
+  - tag2
 date: YYYY-MM-DD
-sources: [daily-YYYY-MM-DD.md, session-id]
-wikilinks: [[SlugA]], [[SlugB]]
+sources:
+  - "daily-YYYY-MM-DD.md"
+wikilinks:
+  - "[[SlugA]]"
+  - "[[SlugB]]"
 ---
 ```
+
+**CRITICAL**: Wikilinks in frontmatter MUST be wrapped in double quotes (e.g., `"[[Slug]]"`).
 
 ## 2. Structural Patterns
 

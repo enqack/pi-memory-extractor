@@ -98,6 +98,8 @@ export function ensureVaultStructure(vaultRoot: string, config: PiMemoryConfig):
     path.join(vaultRoot, config.KNOWLEDGE, "concepts"),
     path.join(vaultRoot, config.KNOWLEDGE, "connections"),
     path.join(vaultRoot, config.KNOWLEDGE, "qa"),
+    path.join(vaultRoot, config.KNOWLEDGE, "lessons-learned"),
+    path.join(vaultRoot, config.KNOWLEDGE, "cursed-knowledge"),
     path.join(vaultRoot, config.KNOWLEDGE, "archive"),
     path.join(vaultRoot, config.DEEP_THOUGHTS),
     path.join(vaultRoot, config.REPORTS),

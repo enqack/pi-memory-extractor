@@ -14,7 +14,7 @@ import { renderTemplate } from "./templates.js";
 /**
  * Extraction limits to keep the context window stable.
  */
-const EXTRACTION_LIMITS = {
+export const EXTRACTION_LIMITS = {
   MAX_HISTORY_MESSAGES: 50,
   MAX_MESSAGE_CHARS: 1000,
   MAX_TOOL_RESULT_CHARS: 200,
@@ -25,7 +25,7 @@ const EXTRACTION_LIMITS = {
 /**
  * Parses a session .jsonl file into an array of entries.
  */
-function parseSessionEntries(content: string): any[] {
+export function parseSessionEntries(content: string): any[] {
   return content
     .split("\n")
     .filter((line) => line.trim())
@@ -42,7 +42,7 @@ function parseSessionEntries(content: string): any[] {
 /**
  * Simple migration helper to ensure old session entries remain compatible.
  */
-function migrateSessionEntries(entries: any[]): void {
+export function migrateSessionEntries(entries: any[]): void {
   // No-op for modern ExtensionAPI sessions
 }
 
@@ -154,118 +154,4 @@ export async function serializeDeepTranscript(ctx: ExtensionContext): Promise<st
   }
 
   return allTranscripts.join("\n\n---\n\n");
-}
-
-/**
- * Main extraction entry point.
- */
-export async function runExtraction(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  vaultRoot: string,
-  config: PiMemoryConfig,
-  label: string,
-  transcript?: string,
-  deep: boolean = false,
-): Promise<"sent" | "empty" | "failed"> {
-  const finalTranscript =
-    transcript ??
-    (deep
-      ? await serializeDeepTranscript(ctx)
-      : serializeTranscript(ctx.sessionManager.getBranch()));
-
-  if (!finalTranscript.trim()) {
-    return "empty";
-  }
-
-  // Sanitization: Prevent the transcript from escaping our XML-style data tags
-  const sanitizedTranscript = finalTranscript.replace(/<\/transcript_data>/g, "</TRANSCRIPT_DATA_ESCAPED>");
-
-  let deepThoughtsCriteria = "Be concise and capture key technical decisions.";
-  try {
-    const criteriaPath = path.join(__dirname, "prompts", "deep-thoughts-criteria.md");
-    if (fs.existsSync(criteriaPath)) {
-      deepThoughtsCriteria = fs.readFileSync(criteriaPath, "utf-8");
-    }
-  } catch (err) {
-    console.error(`[Memory Extractor] Failed to read criteria: ${err}`);
-  }
-
-  const today = new Date().toISOString().split("T")[0];
-  // Calculate a unique time suffix: XXXX-MM-DD-HH-MM-SS
-  const timeSuffix = new Date().toISOString().split("T")[1].replace(/:/g, "-").replace(/:/g, "-").substring(0, 7);
-
-  const dailyLogPath = path.join(vaultRoot, config.DAILY, `${today}.md`);
-  const dailyLogRelPath = path.relative(ctx.cwd, dailyLogPath);
-
-  // *** MODIFIED: Deep Thought Path incorporates time for uniqueness ***
-  const deepThoughtsFile = path.join(vaultRoot, config.DEEP_THOUGHTS, `${today}-${timeSuffix}-deep-thought.md`);
-  const deepThoughtsRelPath = path.relative(ctx.cwd, deepThoughtsFile);
-
-  // 1. Construct the prompt for the primary daily knowledge log (Concept/General)
-  // This prompt captures the standard daily summary artifact.
-  const dailyPrompt = renderTemplate("extraction", {
-    projectRoot: ctx.cwd,
-    vaultRoot,
-    dailyLogPath,
-    dailyLogRelPath,
-    deepThoughtsCriteria,
-    today,
-    transcript: sanitizedTranscript,
-  });
-
-  // 2. Check for the presence of deep thought data to generate a secondary artifact
-  let deepThoughtPrompt = "";
-  let deepThoughtTriggered = false;
-
-  // The YAML marker "[[deep_thought]]" is the deterministic signal we look for.
-  if (deep && finalTranscript.includes("[[deep_thought]]")) {
-    deepThoughtTriggered = true;
-    // The template uses the updated deepThoughtsFile and deepThoughtsRelPath
-    deepThoughtPrompt = renderTemplate("extraction", {
-      projectRoot: ctx.cwd,
-      vaultRoot,
-      dailyLogPath, // Still passed for context consistency in the template render call
-      dailyLogRelPath,
-      deepThoughtsFile,
-      deepThoughtsRelPath,
-      deepThoughtsCriteria,
-      today,
-      transcript: sanitizedTranscript,
-    });
-  }
-
-  // 3. Execute both extractions sequentially in a delayed process
-  // We enqueue this first so it runs regardless of deep thought status.
-
-  // Wait for agent idle state before sending follow-up
-  setTimeout(async () => {
-    try {
-      while (!ctx.isIdle()) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-
-      // A. Send Daily Log Injection (Always runs)
-      await pi.sendUserMessage(dailyPrompt, {
-        deliverAs: "followUp",
-      });
-
-      // B. Send Deep Thought Injection (Conditional)
-      if (deepThoughtTriggered && deepThoughtPrompt) {
-        // Must wait for the first turn to finish before triggering the second
-        while (!ctx.isIdle()) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-
-        await pi.sendUserMessage(deepThoughtPrompt, {
-          deliverAs: "followUp",
-        });
-      }
-    } catch (err) {
-      console.error(`[Memory Extractor] Failed to trigger follow-up: ${err}`);
-      ctx.ui.notify("[Memory Extractor] Failed to trigger extraction prompt.", "error");
-    }
-  }, 100);
-
-  return "sent";
 }

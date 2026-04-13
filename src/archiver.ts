@@ -13,7 +13,7 @@ export function getArticlesToArchive(
   config: PiMemoryConfig,
 ): string[] {
   const kbDir = path.join(vaultRoot, config.KNOWLEDGE);
-  const categories = ["concepts", "connections", "qa"];
+  const categories = ["concepts", "connections", "qa", "lessons-learned", "cursed-knowledge"];
   const toArchive: string[] = [];
   const now = Date.now();
 

@@ -39,5 +39,11 @@ YOU MUST STRICTLY FOLLOW the Daily Summary Schema defined below.
 ---
 
 **GO NOW**: Extract the high-signal findings from the transcript data provided above.
+YOU MUST EXECUTE REAL TOOL CALLS (`read`, `write`, `edit`) NOW.
+
+**STRICT COMPLIANCE**:
+1. Every file you write MUST start with YAML frontmatter on **LINE 1**.
+2. **NO PREAMBLE**: When calling the `write` tool, the `content` MUST start immediately with the YAML frontmatter.
+3. Follow the schemas below exactly.
 
 **Post-Extraction Instruction**: After completing the tool call to save the knowledge, review the extracted content and suggest 3 appropriate tags/slugs for the knowledge base that could be used for future articles or searching.

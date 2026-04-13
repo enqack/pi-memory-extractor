@@ -3,9 +3,14 @@
 This contract defines the formatting and rules for the master `knowledge/index.md`.
 
 ## 1. Document Structure
-The index MUST be organized into clear sections for Concepts, Connections, and QA.
+The index MUST be organized into clear sections and start with YAML frontmatter at **LINE 1**.
 
 ```markdown
+---
+title: Knowledge Base Index
+type: index
+---
+
 # Knowledge Base Index
 
 ## Concepts
@@ -16,6 +21,12 @@ The index MUST be organized into clear sections for Concepts, Connections, and Q
 
 ## Q&A
 - [[slug]] — [A one-line summary of the solution]
+
+## Lessons Learned
+- [[slug]] — [A one-line summary of the key lesson]
+
+## Cursed Knowledge
+- [[slug]] — [A one-line summary of the issue/fix]
 
 ---
 *Last Updated: YYYY-MM-DD HH:MM*

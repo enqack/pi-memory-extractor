@@ -4,37 +4,35 @@ A knowledge-management extension for the [Pi AI Agent](https://github.com/badlog
 
 ---
 
-## The Core Pipeline
+## The Orchestrated Pipeline
 
-1. **Structural-Based Truncation**: We have moved away from brittle, character-count-based truncation. The new logic uses a robust, structural method based on counting paragraphs and logical parts to ensure complete, well-formed Markdown output.
-2. **Enhanced Resilience**: This structural approach significantly improves the resilience of handling exceptionally long transcripts and complex tool result previews, preventing data loss or malformed output.
-3. **Pipeline Robustness**: These changes collectively lead to a significantly more robust and reliable knowledge extraction pipeline, ensuring high-quality knowledge is captured in every session.
+Unlike basic extraction methods, this extension uses a **Multi-Step Memory Orchestrator** to ensure high-fidelity knowledge capture. Every extraction goes through a mandatory 3-step workflow:
 
-1. **Injection**: At session start, the extension injects the most recent entries from the knowledge base index and instructs the agent on how to retrieve deeper history on demand.
-2. **Capture**: During the session (at checkpoints, compaction, and shutdown), discoveries are extracted into `daily/YYYY-MM-DD.md`.
-3. **Distillation**: Daily logs are compiled into a structured, tiered knowledge base (Concepts, Connections, and Q&A).
+1.  **Step 1: Analysis (Thematic Categorization)**: The agent identifies the three most dominant, recurring themes from the session.
+2.  **Step 2: Mapping (Relationship Deep-Dive)**: The agent maps entities (Concepts, Products, People) and their explicit relationships (e.g., `[A] -> [Implemented via] -> [B]`).
+3.  **Step 3: Synthesis (Final Structured Output)**: The agent compiles the analysis and mapping into a structured JSON packet, which is then committed to the knowledge base via the `submit_knowledge_synthesis` tool.
 
 ---
 
-## Architecture
+## Core Features
 
-### Search and Retrieval
+### 🧠 Orchestrated Knowledge Extraction
+Automatically triggers during session compaction or shutdown, or manually via commands. The orchestrator maintains state across turns, guiding the agent through the extraction steps.
 
-To handle repositories with hundreds of articles without bloating the context window, the extension uses an on-demand retrieval model:
+### 🔍 Smart Context Injection
+At session start, the extension injects a summary of the most recent knowledge index and uses **Semantic Recall** to surface relevant articles from the knowledge base based on the initial conversation topics.
 
-- **`search_knowledge(query)`**: Allows the agent to search the knowledge index for specific topics.
-- **`read_knowledge_article(slug)`**: Allows the agent to read full articles only when needed.
-- **Optimized Injection**: Only the most recent index summaries are injected at startup to keep the context window clear.
+### 🏗️ Robust Knowledge Compiler
+Compiles daily logs into a structured, tiered knowledge base (Concepts, Connections, Q&A, Lessons Learned, and Cursed Knowledge). It uses incremental logic to only process new logs unless the `--force` flag is used.
 
-### Incremental and Hierarchical Compilation
+### 🧹 Automatic Archiving
+Keeps the knowledge base fresh by automatically moving articles older than 6 months to the `archive/` directory during compilation or via the `cleanup_knowledge_vault` tool.
 
-- **Incremental Logic**: The compiler parses `knowledge/log.md` to automatically skip daily logs that have already been processed.
-- **Hierarchical Indexing**: Categorized indexes (`concepts/index.md`, `connections/index.md`, etc.) are maintained alongside a master catalog for efficient scaling.
-- **Force Flag**: Supports `/compile-knowledge --force` to re-process the entire history when needed.
-
-### Knowledge Lifecycle
-
-- **Automated Archiving**: Articles older than six months that describe temporary workflows or superseded decisions are automatically moved to `knowledge/archive/` during compilation.
+### 🛠️ Automated Knowledge Guardrails
+Ensures the structural integrity of the knowledge base by intercepting `write` and `edit` calls to Markdown files. It automatically:
+- **Repairs Frontmatter**: Strips accidental LLM chatter/thinking before the YAML block.
+- **Quotes Wikilinks**: Ensures `[[links]]` in YAML frontmatter are properly quoted for Obsidian compatibility.
+- **Enforces YAML**: Blocks writes to the knowledge base that lack a valid YAML frontmatter header.
 
 ---
 
@@ -52,11 +50,10 @@ project-root/
         ├── index.md         # Master index (catalog)
         ├── log.md           # Compilation history
         ├── concepts/        # Single-topic articles
-        │   └── index.md
         ├── connections/     # Relational articles
-        │   └── index.md
         ├── qa/              # Question-and-answer articles
-        │   └── index.md
+        ├── lessons-learned/ # High-level project/task takeaways
+        ├── cursed-knowledge/# Hard-to-fix or obscure technical issues
         └── archive/         # Stale knowledge (archived after 6 months)
 ```
 
@@ -64,25 +61,37 @@ project-root/
 
 ## Technical Notes
 
-- **In-Session LLM Execution**: Uses the active agent session for extractions and compilations, reducing latency.
-- **Dynamic Discovery**: Automatically identifies the vault root by searching for the configured vault folder or a `daily/` sentinel, walking up to 6 levels from the current directory.
-- **Cascading Configuration**: Supports a three-tiered configuration system (System → User → Project) via `pi-memory.json`, with the project-level config taking highest precedence.
-- **Relative Pathing**: All paths passed to the LLM are resolved relative to the project root, ensuring portability regardless of vault name.
-- **Persistent State**: Stores session metadata directly in the session file via `pi.appendEntry`.
+- **Multi-Step Orchestration**: Uses the `MemoryOrchestrator` to manage stateful extraction workflows across multiple agent turns, storing progress in the session history.
+- **Smart Recall Heuristics**: Uses a lightweight keyword-based scoring system to find relevant articles in the `index.md` based on recent conversation history, injecting summaries to provide context.
+- **Structural Integrity**: Actively repairs and enforces Obsidian-compatible YAML frontmatter in knowledge articles.
+- **Cascading Configuration**: Supports a three-tiered configuration system (System → User → Project) via `pi-memory.json`.
+- **Event-Driven Lifecycle**: Automatically manages memory lifecycle through `session_start`, `agent_end`, `session_compact`, and `session_shutdown` hooks.
 
 ---
 
-## Source Layout
+## Commands
 
-| File | Description |
+| Command | Description |
+|---------|-------------|
+| `/extract-knowledge` | Manually trigger session knowledge extraction. |
+| `/extract-knowledge --deep` | Trigger extraction scanning ALL historical session files. |
+| `/compile-knowledge` | Compile daily logs into the structured knowledge base. |
+| `/compile-knowledge --force` | Re-process all daily logs, including already-compiled entries. |
+
+---
+
+## Tools
+
+The extension registers several tools that can be invoked by the agent or manually:
+
+| Tool | Description |
 |------|-------------|
-| `src/index.ts` | Main orchestrator and ExtensionAPI entry point. |
-| `src/extractor.ts` | Filtered transcript serialization and extraction prompt building. |
-| `src/compiler.ts` | Log aggregation, synthesis, and archival prompt building. |
-| `src/config.ts` | Three-tiered cascading configuration loader (System → User → Project). |
-| `src/constants.ts` | Internal default path configuration. |
-| `src/utils.ts` | Shared utilities — vault root discovery and date helpers. |
-| `src/deep-thoughts-criteria.md` | Criteria governing what qualifies as a "Deep Thought." |
+| `extract_knowledge` | Triggers the orchestrated extraction workflow. Supports `deep` mode. |
+| `compile_knowledge` | Triggers the compilation of daily logs. |
+| `submit_knowledge_synthesis` | **(Internal)** Used by the orchestrator to commit final synthesized knowledge. |
+| `cleanup_knowledge_vault` | Archives articles older than 6 months. |
+| `search_knowledge` | Search the knowledge base index for specific keywords. |
+| `read_knowledge_article` | Read the full content of a specific knowledge article. |
 
 ---
 
@@ -96,17 +105,9 @@ Once published, install the extension globally via the Pi CLI:
 pi install npm:pi-memory-extractor
 ```
 
-### Method 2: CLI Flag (Session-based)
+### Method 2: Project Settings (Recommended)
 
-For quick testing or one-off use, load the extension directly when starting Pi:
-
-```bash
-pi -e ./extensions/pi-memory-extractor/src/index.ts
-```
-
-### Method 3: Project Settings (Recommended)
-
-Add the extension to your project's `.pi/agent/settings.json` so it loads automatically for this repository:
+Add the extension to your project's `.pi/agent/settings.json`:
 
 ```json
 {
@@ -116,117 +117,25 @@ Add the extension to your project's `.pi/agent/settings.json` so it loads automa
 }
 ```
 
-### Method 4: Global Settings
-
-To use the extension across all projects, add the absolute path to your global `~/.pi/agent/settings.json`:
-
-```json
-{
-  "extensions": [
-    "/absolute/path/to/extensions/pi-memory-extractor/src/index.ts"
-  ]
-}
-```
-
 ---
 
 ## Configuration
 
-`pi-memory-extractor` uses a three-tiered, cascading configuration system modeled after tools such as Git and ESLint. Settings are resolved by merging all applicable configuration files in order of increasing precedence, with more specific scopes always overriding broader ones.
+`pi-memory-extractor` uses a three-tiered, cascading configuration system.
 
 ### Resolution Order
 
-| Tier | Location | Precedence |
-|------|----------|------------|
-| Internal Defaults | Compiled into the extension | Lowest |
-| System | `/etc/pi-memory.json` | — |
-| User | `~/.config/pi-memory.json` or `~/.pi-memory.json` | — |
-| Project | `pi-memory.json` or `.pi-memory.json` (nearest ancestor directory) | Highest |
-
-Each tier is optional. If a file is not present, that tier is skipped and the next lower tier's values apply. Project-level configuration is discovered by walking up the directory tree from the current working directory, allowing workspace roots and sub-directories to each carry their own overrides.
+1.  **Project**: `pi-memory.json` in the nearest ancestor directory (Highest Precedence).
+2.  **User**: `~/.config/pi-memory.json` or `~/.pi-memory.json`.
+3.  **System**: `/etc/pi-memory.json`.
+4.  **Internal Defaults** (Lowest Precedence).
 
 ### Configuration Schema
-
-All configuration files use JSON format and support the following fields:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `VAULT_ROOT` | `string` | `"knowledge-base"` | Name of the vault folder relative to the project root. |
-| `DAILY` | `string` | `"daily"` | Sub-directory within the vault for raw daily session logs. |
-| `KNOWLEDGE` | `string` | `"knowledge"` | Sub-directory within the vault for compiled knowledge articles. |
-| `DEEP_THOUGHTS` | `string` | `"deep-thoughts"` | Sub-directory within the vault for deep-thought criteria and meta-logs. |
-| `REPORTS` | `string` | `"reports"` | Sub-directory within the vault for generated summaries and reports. |
-
-All sub-directory paths are resolved relative to the vault root, not the project root.
-
-### Examples
-
-**Minimal project override — rename the vault folder**
-
-Place a `pi-memory.json` in the project root:
-
-```json
-{
-  "VAULT_ROOT": "ai-notes"
-}
-```
-
-This causes the extension to use `project-root/ai-notes/` instead of `project-root/knowledge-base/`.
-
-**User-level defaults — applied across all projects**
-
-Create `~/.config/pi-memory.json`:
-
-```json
-{
-  "VAULT_ROOT": "memory",
-  "DAILY": "logs"
-}
-```
-
-A project-level `pi-memory.json` will still override these values for that specific project.
-
-**Full custom layout**
-
-```json
-{
-  "VAULT_ROOT": "docs/ai-knowledge",
-  "DAILY": "sessions",
-  "KNOWLEDGE": "articles",
-  "DEEP_THOUGHTS": "reflections",
-  "REPORTS": "summaries"
-}
-```
-
-### Vault Discovery
-
-At session start, the extension resolves the vault root using the following logic:
-
-1. Check if the current working directory contains the configured `DAILY` sub-directory (i.e., Pi is already running inside the vault).
-2. Check if a folder named `VAULT_ROOT` exists in the current working directory.
-3. Walk up the directory tree (up to 6 levels), repeating checks 1 and 2 at each level.
-4. If no vault is found, fall back to `<cwd>/<VAULT_ROOT>` as the default.
-
-This ensures the extension works correctly whether Pi is launched from the project root, a sub-directory, or a monorepo workspace.
-
----
-
-## Verifying Installation
-
-Once loaded, verify the extension is active by:
-
-1. **Status Bar**: Look for `MemEx: idle` in the bottom right of the Pi UI.
-2. **Commands**: Type `/` and confirm that `/extract-knowledge` and `/compile-knowledge` appear.
-3. **Logs**: Check the Pi agent console for: `[pi-memory-extractor] Extension loaded (v2.0.0 — ExtensionAPI native).`
-
----
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/extract-knowledge` | Manually save current session learnings to the daily log. |
-| `/compile-knowledge` | Compile recent daily logs into the structured knowledge base. |
-| `/compile-knowledge --force` | Re-process all daily logs, including already-compiled entries. |
-
-The status bar displays the current phase (`idle`, `extracting…`, `compiling…`) and notifications are emitted when knowledge context is injected or archiving occurs.
+| `DAILY` | `string` | `"daily"` | Sub-directory for raw daily session logs. |
+| `KNOWLEDGE` | `string` | `"knowledge"` | Sub-directory for compiled knowledge articles. |
+| `DEEP_THOUGHTS` | `string` | `"deep-thoughts"` | Sub-directory for deep-thought criteria. |
+| `REPORTS` | `string` | `"reports"` | Sub-directory for generated reports. |

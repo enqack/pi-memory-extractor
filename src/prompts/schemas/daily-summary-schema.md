@@ -2,12 +2,20 @@
 
 This contract defines the format for raw conversation knowledge extractions stored in `daily/YYYY-MM-DD.md`.
 
-## 1. Title & Metadata
-The file should begin with a standard header.
+## 1. Frontmatter & Title
+The file MUST begin with the following YAML frontmatter starting at **LINE 1** (ABSOLUTE TOP) of the file. No text, thought blocks, or whitespace is allowed before the opening `---`.
 
-```markdown
-# Session Knowledge — YYYY-MM-DD
+```yaml
+---
+title: "Session Knowledge — YYYY-MM-DD"
+date: YYYY-MM-DD
+tags:
+  - daily-log
+  - pi-memory
+---
 ```
+
+# Session Knowledge — YYYY-MM-DD
 
 ## 2. Categorization Buckets
 Capture session findings into the following sections.

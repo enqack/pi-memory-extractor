@@ -25,19 +25,28 @@ YOU MUST EXECUTE REAL TOOL CALLS (`read`, `write`, `edit`, `ls`, `grep`) NOW.
 ## EXECUTION RULES:
 1. **Recursive Synthesis**: Use `ls` and `grep` to find related articles BEFORE creating new ones. Synthesize info into existing articles whenever possible.
 2. **Contract Enforcement**: Every file you write MUST be 100% compliant with the schemas provided below.
-3. **Master Index**: Your final step MUST be to update `{{relKnowledge}}/index.md` based on all current articles.
+3. **Obsidian Compliance**: Every Markdown file MUST start with a `---` YAML frontmatter block on **LINE 1**. **DO NOT** put any text, thinking blocks, preamble, or whitespace before the first `---`.
+4. **Valid YAML**: Wikilinks in frontmatter MUST be wrapped in double quotes: `wikilinks: ["[[Slug]]"]`.
+5. **No Preamble**: When calling the `write` tool, the `content` MUST start immediately with the YAML frontmatter. Do not explain what you are doing inside the tool call.
+6. **Master Index**: Your final step MUST be to update `{{relKnowledge}}/index.md` based on all current articles.
 
 ---
 
 ## REFERENCE CONTRACTS (SCHEMAS):
 
-### 1. Article Schema (Concepts, Connections, QA)
+### 1. Core Article Schema (Concepts, Connections, QA)
 {{{articleSchema}}}
 
-### 2. Compilation Log Schema (log.md)
+### 2. Lessons Learned Schema
+{{{lessonsLearnedSchema}}}
+
+### 3. Cursed Knowledge Schema
+{{{cursedKnowledgeSchema}}}
+
+### 4. Compilation Log Schema (log.md)
 {{{compilationLogSchema}}}
 
-### 3. Index Catalog Schema (index.md)
+### 5. Index Catalog Schema (index.md)
 {{{indexSchema}}}
 
 ---
