@@ -44,8 +44,8 @@ The extension organizes knowledge under a vault root folder (default: `knowledge
 project-root/
 └── knowledge-base/          # Vault root (configurable via pi-memory.json)
     ├── daily/               # Raw daily session logs (YYYY-MM-DD.md)
-    ├── deep-thoughts/       # Deep thoughts criteria and meta-log
-    ├── reports/             # Generated summaries and reports
+    ├── deep-thoughts/       # Absurdist reflections and "Deep Thought" articles
+    ├── reports/             # Generated summaries and project reports
     └── knowledge/           # Compiled knowledge base
         ├── index.md         # Master index (catalog)
         ├── log.md           # Compilation history
@@ -76,7 +76,7 @@ project-root/
 | `/extract-knowledge` | Manually trigger session knowledge extraction. |
 | `/extract-knowledge --deep` | Trigger extraction scanning ALL historical session files. |
 | `/compile-knowledge` | Compile daily logs into the structured knowledge base. |
-| `/compile-knowledge --force` | Re-process all daily logs, including already-compiled entries. |
+| `/compile-knowledge --force`, `-f` | Re-process all daily logs, including already-compiled entries. |
 
 ---
 
@@ -125,7 +125,7 @@ Add the extension to your project's `.pi/agent/settings.json`:
 
 ### Resolution Order
 
-1.  **Project**: `pi-memory.json` in the nearest ancestor directory (Highest Precedence).
+1.  **Project**: `pi-memory.json` or `.pi-memory.json` in the nearest ancestor directory (Highest Precedence).
 2.  **User**: `~/.config/pi-memory.json` or `~/.pi-memory.json`.
 3.  **System**: `/etc/pi-memory.json`.
 4.  **Internal Defaults** (Lowest Precedence).

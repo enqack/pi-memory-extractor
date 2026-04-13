@@ -9,6 +9,7 @@ import {
 import { PiMemoryConfig } from "./config.js";
 import { renderTemplate } from "./templates.js";
 import { TODAY } from "./utils.js";
+import { loadPromptRaw } from "./templates.js";
 
 export type WorkflowStep = "analysis" | "mapping" | "synthesis" | "idle";
 
@@ -21,6 +22,7 @@ export interface WorkflowState {
     themes?: any[];
     relationships?: any[];
     synthesis?: any;
+    deepThoughts?: { topic: string; content?: string }[];
   };
   lastUpdated: number;
 }
@@ -107,9 +109,39 @@ export class MemoryOrchestrator {
    * Called by the index when a turn ends (for chat-based steps).
    */
   public async advanceWorkflow(ctx: ExtensionContext) {
+    const branch = ctx.sessionManager.getBranch();
+    const lastAssistantMsg = [...branch].reverse().find(e => e.type === "message" && e.message.role === "assistant");
+    
+    if (!lastAssistantMsg) return;
+    
+    const content = typeof lastAssistantMsg.message.content === "string" 
+      ? lastAssistantMsg.message.content 
+      : JSON.stringify(lastAssistantMsg.message.content);
+
     if (this.state.step === "analysis") {
-        this.state.step = "mapping";
+      // Basic check: did it identify themes or deep thoughts?
+      // If it looks like a question or it's too short, don't advance.
+      if (content.length < 50 || content.includes("?") && !content.includes("[[")) {
+          console.log("[MemoryOrchestrator] Step 'analysis' seems incomplete. Not advancing.");
+          return;
+      }
+
+      // Extract deep thoughts
+      const markers = content.match(/\[\[deep_thought:\s*(.*?)\]\]/g);
+      if (markers) {
+        this.state.collectedData.deepThoughts = markers.map(m => {
+          const topic = m.match(/\[\[deep_thought:\s*(.*?)\]\]/)?.[1] || "Untitled Thought";
+          return { topic };
+        });
+      }
+
+      this.state.step = "mapping";
     } else if (this.state.step === "mapping") {
+        // Basic check: did it identify relationships? (Looking for arrows)
+        if (!content.includes("→") && !content.includes("->")) {
+            console.log("[MemoryOrchestrator] Step 'mapping' seems incomplete. Not advancing.");
+            return;
+        }
         this.state.step = "synthesis";
     } else {
         return; // Already in synthesis or idle
@@ -151,26 +183,31 @@ export class MemoryOrchestrator {
   private async triggerNextStep(ctx: ExtensionContext) {
     if (!this.config) return;
 
-    let instructions = "";
-    // Note: In a real environment, we'd use renderTemplate or similar. 
-    // Here we'll construct it based on the current step state.
+    let prompt = "";
     
     if (this.state.step === "analysis") {
-        instructions = `### KNOWLEDGE EXTRACTION PHASE: ANALYSIS ###\n\n**TASK:** Complete **STEP 1 (THEMATIC CATEGORIZATION)** from the Knowledge Extraction Workflow. Identify 3 dominant themes from the context below and summarize each in one concise sentence. Report these in the chat.`;
+      const criteria = loadPromptRaw("deep-thoughts-criteria");
+      prompt = renderTemplate("orch-step1", {
+        criteria,
+        transcript: this.state.transcript
+      });
     } else if (this.state.step === "mapping") {
-        instructions = `### KNOWLEDGE EXTRACTION PHASE: RELATIONSHIP MAPPING ###\n\n**TASK:** Complete **STEP 2 (KEY RELATIONSHIP MAPPING)**. Identify at least 4 entities and their relationships using the format: **[Entity A]** → **[Relationship Type]** → **[Entity B]**. Report these in the chat.`;
+      prompt = renderTemplate("orch-step2", {
+        transcript: this.state.transcript
+      });
     } else if (this.state.step === "synthesis") {
-        instructions = `### KNOWLEDGE EXTRACTION PHASE: FINAL SYNTHESIS ###\n\n**TASK:** Complete **STEP 3 (FINAL STRUCTURED SYNTHESIS)**. Populate the final JSON and call the 'submit_knowledge_synthesis' tool with the resulting packet.`;
+      prompt = renderTemplate("orch-step3", {
+        deepThoughts: this.state.collectedData.deepThoughts,
+        transcript: this.state.transcript
+      });
     }
 
-    const prompt = `[ORCHESTRATOR DIRECTIVE]\n\n${instructions}\n\n**CONTEXT:**\n${this.state.transcript}`;
+    if (!prompt) return;
 
     ctx.ui.setStatus("memory-extractor", `🧠 MemEx: ${this.state.step}...`);
 
-    // Note: Do NOT use ctx.waitForIdle() here as this is often called from 
-    // turn_end, which would cause a deadlock.
     try {
-        await this.pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+        await this.pi.sendUserMessage(`[ORCHESTRATOR DIRECTIVE]\n\n${prompt}`, { deliverAs: "followUp" });
     } catch (err) {
         console.error(`[MemoryOrchestrator] Failed to trigger agent: ${err}`);
     }
@@ -222,10 +259,36 @@ export class MemoryOrchestrator {
     }
 
     try {
-        await withFileMutationQueue(dailyLogPath, async () => {
-            await fs.promises.appendFile(dailyLogPath, content);
-        });
-        ctx.ui.notify(`[MemoryOrchestrator] Successfully saved knowledge to ${path.basename(dailyLogPath)}`, "success");
+      await withFileMutationQueue(dailyLogPath, async () => {
+        await fs.promises.appendFile(dailyLogPath, content);
+      });
+
+      // Write Deep Thoughts
+      if (data.deep_thoughts && data.deep_thoughts.length > 0) {
+        for (const dt of data.deep_thoughts) {
+          const slug = dt.topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+          const timeSuffix = new Date().toISOString().split("T")[1].replace(/:/g, "-").substring(0, 5);
+          const dtFilename = `${today}-${timeSuffix}-${slug}.md`;
+          const dtPath = path.join(this.vaultRoot, this.config.DEEP_THOUGHTS, dtFilename);
+
+          const dtContent = `---
+title: "${dt.topic}"
+date: ${today}
+type: deep-thought
+---
+
+# Deep Thought: ${dt.topic}
+
+${dt.content}
+
+---
+*Extracted from session: ${this.state.trigger}*
+`;
+          await fs.promises.writeFile(dtPath, dtContent);
+        }
+      }
+
+      ctx.ui.notify(`[MemoryOrchestrator] Successfully saved knowledge to ${path.basename(dailyLogPath)}`, "success");
     } catch (err) {
         ctx.ui.notify(`[MemoryOrchestrator] Failed to save knowledge: ${(err as Error).message}`, "error");
     }

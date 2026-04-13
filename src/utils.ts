@@ -25,13 +25,17 @@ export function findVaultRoot(startDir: string, config: PiMemoryConfig): string 
   return vaultPath;
 }
 
+const STOP_WORDS = new Set(["this", "that", "with", "from", "your", "have", "been", "into", "their", "there", "which", "about", "could", "would", "should", "using", "these", "those"]);
+
 /**
  * Extract potential keywords from text for matching against the KB index.
  */
 export function extractKeywords(text: string): string[] {
   // Simple heuristic: words > 3 chars, split by spaces/punctuation, lowercased
   // Also include the project name and common technical terms.
-  const words = text.toLowerCase().split(/[^a-z0-9-]+/).filter(w => w.length > 3);
+  const words = text.toLowerCase()
+    .split(/[^a-z0-9-]+/)
+    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
   return [...new Set(words)];
 }
 

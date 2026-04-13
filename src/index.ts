@@ -16,6 +16,7 @@ import {
   getArticleSummary,
 } from "./utils.js";
 import { getArticlesToArchive, archiveArticles } from "./archiver.js";
+import { SynthesisTabs } from "./tui.js";
 import { MemoryOrchestrator } from "./orchestrator.js";
 
 const IGNORED_DIRS = new Set([
@@ -207,9 +208,16 @@ export default function (pi: ExtensionAPI) {
   function ensureResolved(cwd: string): { vaultRoot: string; config: PiMemoryConfig } {
     if (!config) config = getResolvedConfig(cwd);
     if (!vaultRoot) vaultRoot = findVaultRoot(cwd, config);
-  orchestrator.setContext(vaultRoot, config);
+    orchestrator.setContext(vaultRoot, config);
     return { vaultRoot, config };
   }
+
+  // --- Resource Discovery ---
+  pi.on("resources_discover", async () => {
+    return {
+      skillPaths: [path.join(__dirname, "..", "skills")],
+    };
+  });
 
   // --- Frontmatter Enforcement & Repair ---
   pi.on("tool_call", async (event, ctx) => {
@@ -396,26 +404,30 @@ export default function (pi: ExtensionAPI) {
         priority: StringEnum(["High", "Medium", "Low"] as const, { description: "High, Medium, or Low" }),
         action: Type.String(),
         owner: Type.String()
-      }))
+      })),
+      deep_thoughts: Type.Optional(Type.Array(Type.Object({
+        topic: Type.String({ description: "The title or topic of the deep thought" }),
+        content: Type.String({ description: "The full Jack Handey-style absurdist reflection" })
+      })))
     }),
-    renderResult(result, { expanded }, theme) {
+    renderResult(result, { expanded, tui }, theme) {
       if (!expanded) {
         return new Text(theme.fg("success", "✓ Knowledge synthesis received"), 0, 0);
       }
-      const container = new Container();
-      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
-      container.addChild(new Text(theme.fg("accent", theme.bold("🧠 Knowledge Synthesis Summary")), 1, 0));
-      container.addChild(new Spacer(1));
-      container.addChild(new Text(theme.fg("text", "The orchestrator has received the synthesis and is updating the vault."), 1, 0));
-      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
-      return container;
+      
+      const tabs = new SynthesisTabs(result.details?.params, theme);
+      return {
+        render: (w) => tabs.render(w),
+        invalidate: () => tabs.invalidate(),
+        handleInput: (data) => tabs.handleInput(data, tui),
+      };
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       ensureResolved(ctx.cwd);
       await orchestrator.processStepResult(ctx, params);
       return {
         content: [{ type: "text", text: "Knowledge packet received and processed by Orchestrator." }],
-        details: { status: "received" },
+        details: { status: "received", params },
       };
     },
   });
@@ -498,17 +510,27 @@ export default function (pi: ExtensionAPI) {
     name: "search_knowledge",
     label: "Search Knowledge Base",
     parameters: Type.Object({ query: Type.String() }),
-    renderResult(result: any, { expanded }, theme) {
+    renderResult(result: any, { expanded, tui }, theme) {
       const content = result.content?.[0]?.text || "";
       if (!expanded) {
-        const matches = content.split("\n").filter(l => l.trim().length > 0);
-        return new Text(theme.fg("success", `Found ${matches.length} matches`), 0, 0);
+        const matches = content.split("\n").filter(l => l.trim().length > 0 && !l.includes("No matches"));
+        return new Text(theme.fg("success", `🔍 Found ${matches.length} matches for "${result.details?.query || ""}"`), 0, 0);
       }
       const container = new Container();
       container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
       container.addChild(new Text(theme.fg("accent", theme.bold(`Search Results for "${result.details?.query || ""}"`)), 1, 0));
       container.addChild(new Spacer(1));
-      container.addChild(new Markdown(content, 1, 0, getMarkdownTheme()));
+      
+      const lines = content.split("\n").filter(l => l.trim().length > 0);
+      if (lines.length > 0 && !content.includes("No matches")) {
+          for (const line of lines) {
+              container.addChild(new Text(theme.fg("text", line), 1, 0));
+          }
+      } else {
+          container.addChild(new Text(theme.fg("dim", "  No articles found matching this query."), 1, 0));
+      }
+      
+      container.addChild(new Spacer(1));
       container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
       return container;
     },
