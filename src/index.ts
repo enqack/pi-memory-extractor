@@ -5,8 +5,14 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { runExtraction, serializeTranscript } from "./extractor.js";
 import { runCompilation } from "./compiler.js";
-import { getResolvedConfig, PiMemoryConfig } from "./config.js";
-import { TODAY, findVaultRoot } from "./utils.js";
+import { getResolvedConfig, PiMemoryConfig, ensureVaultStructure } from "./config.js";
+import {
+  TODAY,
+  findVaultRoot,
+  extractKeywords,
+  getArticleSummary,
+} from "./utils.js";
+import { getArticlesToArchive, archiveArticles } from "./archiver.js";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -53,8 +59,10 @@ async function buildSessionContext(
         : lines;
 
     parts.push(`## Knowledge Base Index (Recent entries)\n${recentLines.join("\n")}\n\n---\nIf you need to find more specific topics, use the 'search_knowledge' tool.\nTo read a full article, use 'read_knowledge_article(slug)'.`);
-  } catch {
-    // Ignore if file doesn't exist or can't be read
+  } catch (err) {
+    if ((err as any).code !== "ENOENT") {
+      ctx.ui.notify(`[Memory Extractor] Warning: Could not read Knowledge Index: ${(err as Error).message}`, "warn");
+    }
   }
 
   // --- 2. Today's Daily Log ---
@@ -63,70 +71,85 @@ async function buildSessionContext(
     if (content.trim()) {
       parts.push(`## Today's Session Log (${TODAY()})\n\n${content.trim()}`);
     }
-  } catch {
-    // Ignore
+  } catch (err) {
+    if ((err as any).code !== "ENOENT") {
+      ctx.ui.notify(`[Memory Extractor] Warning: Could not read Daily Log: ${(err as Error).message}`, "warn");
+    }
   }
 
-  // --- 3. Semantic Context Injection ---
-  // Scan workspace for .md or .ts files and find related knowledge.
+  // --- 3. Smart Recall (Semantic Injection) ---
   try {
-    const workspaceFiles: string[] = [];
+    const branch = ctx.sessionManager.getBranch();
+    const recentHistory = branch.slice(-10); // Look at last 10 entries
+    let keywordTargetText = "";
     
-    async function scanDir(dir: string, depth = 0) {
-      if (depth > 5) return; // Limit depth to avoid massive scans
-      
-      let entries: fs.Dirent[] = [];
-      try {
-        entries = await fsPromises.readdir(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-
-      for (const entry of entries) {
-        if (IGNORED_DIRS.has(entry.name) || entry.name === config.VAULT_ROOT) {
-          continue;
+    for (const entry of recentHistory) {
+      if (entry.type === "message") {
+        const msg = entry.message as any;
+        if (typeof msg.content === "string") {
+          keywordTargetText += " " + msg.content;
         }
-
-        const res = path.resolve(dir, entry.name);
-        if (entry.isDirectory()) {
-          await scanDir(res, depth + 1);
-        } else if (entry.name.endsWith(".md") || entry.name.endsWith(".ts")) {
-          workspaceFiles.push(res);
-        }
-        
-        // Safety cap: don't process more than 200 files
-        if (workspaceFiles.length >= 200) return;
       }
     }
 
-    await scanDir(ctx.cwd);
+    if (keywordTargetText.trim().length > 0) {
+      const keywords = extractKeywords(keywordTargetText);
+      const indexPath = path.join(vaultRoot, config.KNOWLEDGE, "index.md");
+      const kbDir = path.join(vaultRoot, config.KNOWLEDGE);
 
-    const indexPath = path.join(vaultRoot, config.KNOWLEDGE, "index.md");
-    let indexContent = "";
-    if (fs.existsSync(indexPath)) {
-      indexContent = (await fsPromises.readFile(indexPath, "utf-8")).toLowerCase();
-    }
+      if (fs.existsSync(indexPath) && keywords.length > 0) {
+        const indexLines = fs.readFileSync(indexPath, "utf-8").split("\n");
+        const matches: { slug: string; line: string; score: number }[] = [];
 
-    if (workspaceFiles.length > 0) {
-      parts.push(`## Workspace Context (Semantic Injection)`);
-      let foundLinks = 0;
+        for (const line of indexLines) {
+          if (!line.startsWith("- [[")) continue;
+          
+          const slugMatch = line.match(/\[\[(.*?)\]\]/);
+          if (!slugMatch) continue;
+          const slug = slugMatch[1];
+          const lowerLine = line.toLowerCase();
+          
+          let score = 0;
+          for (const kw of keywords) {
+            if (lowerLine.includes(kw)) score++;
+          }
 
-      for (const file of workspaceFiles.slice(0, 50)) {
-        const fileName = path.basename(file, path.extname(file)).toLowerCase();
-        if (indexContent.includes(fileName)) {
-          parts.push(`- [Relates to Knowledge: \`${path.basename(file)}\`] (Found in index)`);
-          foundLinks++;
+          if (score > 0) {
+            matches.push({ slug, line, score });
+          }
         }
-      }
 
-      if (foundLinks > 0) {
-        parts.push(`\nAgent: Explicit links to related knowledge found above.`);
-      } else {
-        parts.push(`\nAgent: Use 'search_knowledge' with filenames as keywords if you need context.`);
+        // Sort by score and take top 3
+        matches.sort((a, b) => b.score - a.score);
+        const topMatches = matches.slice(0, 3);
+
+        if (topMatches.length > 0) {
+          parts.push(`## Active Memories (Surgically Recalled)`);
+          for (const match of topMatches) {
+            // Try to find the file in concepts, connections, or qa
+            const categories = ["concepts", "connections", "qa"];
+            let foundSummary = false;
+            
+            for (const cat of categories) {
+              const articlePath = path.join(kbDir, cat, `${match.slug}.md`);
+              const summary = getArticleSummary(articlePath);
+              if (summary) {
+                parts.push(`### Memory: [[${match.slug}]]\n${summary}`);
+                foundSummary = true;
+                break;
+              }
+            }
+
+            if (!foundSummary) {
+              parts.push(`- [[${match.slug}]] (Reference only)`);
+            }
+          }
+        }
       }
     }
   } catch (e) {
-    // Fail silently
+    ctx.ui.notify(`[Memory Extractor] Warning: Smart Recall failed: ${(e as Error).message}`, "warn");
+    console.error(`[Memory Extractor] Smart Recall failed: ${e}`);
   }
 
   if (parts.length === 0) return null;
@@ -143,6 +166,8 @@ interface ExtractorState {
 
 interface ExtensionState {
   isCompacting: boolean;
+  pendingExtractionTranscript: string | null;
+  lastExtractionAt: number;
 }
 
 // --- Extension factory ---
@@ -151,7 +176,11 @@ export default function (pi: ExtensionAPI) {
   let vaultRoot: string | null = null;
   let config: PiMemoryConfig | null = null;
 
-  const state: ExtensionState = { isCompacting: false };
+  const state: ExtensionState = {
+    isCompacting: false,
+    pendingExtractionTranscript: null,
+    lastExtractionAt: 0,
+  };
 
   // Helper to lazily ensure config + vaultRoot are resolved
   function ensureResolved(cwd: string): { vaultRoot: string; config: PiMemoryConfig } {
@@ -165,6 +194,12 @@ export default function (pi: ExtensionAPI) {
     // Resolve config and vault root fresh each session
     config = getResolvedConfig(ctx.cwd);
     vaultRoot = findVaultRoot(ctx.cwd, config);
+
+    // Ensure vault structure exists
+    const created = ensureVaultStructure(vaultRoot, config);
+    if (created) {
+      ctx.ui.notify("[Memory Extractor] Initialized new knowledge vault structure.", "info");
+    }
 
     // Restore last-run state from session entries
     const entries = ctx.sessionManager.getEntries();
@@ -204,21 +239,39 @@ export default function (pi: ExtensionAPI) {
     const r = ensureResolved(ctx.cwd);
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: waiting for compaction…");
 
+    // Capture the transcript BEFORE it is truncated by compaction
     const transcript = serializeTranscript(ctx.sessionManager.getBranch());
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact", transcript, false, state).catch((err) => {
-      ctx.ui.notify(`[Memory Extractor] Extraction error: ${(err as Error).message}`, "error");
-    });
-
-    pi.appendEntry("memory-extractor-state", {
-      lastExtractedAt: Date.now(),
-      lastExtractedEvent: "pre_compact",
-    } satisfies ExtractorState);
+    if (transcript.trim()) {
+      state.pendingExtractionTranscript = transcript;
+    }
   });
 
   // --- session_compact ---
   pi.on("session_compact", async (_event, ctx) => {
     state.isCompacting = false;
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle");
+
+    // Trigger any pending extraction after compaction is finished and context is clean
+    if (state.pendingExtractionTranscript) {
+      // Anti-loop Guard: Don't trigger if we extracted in the last 5 minutes
+      const COOLDOWN_MS = 5 * 60 * 1000;
+      const now = Date.now();
+      if (now - state.lastExtractionAt < COOLDOWN_MS) {
+        ctx.ui.setStatus("memory-extractor", "🧠 MemEx: idle (cooldown)");
+        ctx.ui.notify("[Memory Extractor] Skipped auto-extraction: Cooling down from a recent session trigger.", "info");
+        state.pendingExtractionTranscript = null;
+        return;
+      }
+
+      state.lastExtractionAt = now;
+      const r = ensureResolved(ctx.cwd);
+      const transcript = state.pendingExtractionTranscript;
+      state.pendingExtractionTranscript = null;
+
+      runExtraction(pi, ctx, r.vaultRoot, r.config, "pre_compact", transcript, false).catch((err) => {
+        ctx.ui.notify(`[Memory Extractor] Deferred extraction error: ${(err as Error).message}`, "error");
+      });
+    }
   });
 
   // --- session_shutdown ---
@@ -227,7 +280,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("memory-extractor", "🧠 MemEx: extracting…");
 
     const transcript = serializeTranscript(ctx.sessionManager.getBranch());
-    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end", transcript, false, state).catch(() => {
+    runExtraction(pi, ctx, r.vaultRoot, r.config, "session_end", transcript, false).catch(() => {
       // Silently ignore on shutdown — process may exit before this resolves
     });
 
@@ -249,12 +302,19 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`[Memory Extractor] Starting ${deep ? "deep " : ""}extraction…`, "info");
 
       try {
-        await runExtraction(pi, ctx, r.vaultRoot, r.config, "manual", undefined, deep, state);
-        pi.appendEntry("memory-extractor-state", {
-          lastExtractedAt: Date.now(),
-          lastExtractedEvent: deep ? "manual_deep" : "manual",
-        } satisfies ExtractorState);
-        ctx.ui.notify("[Memory Extractor] Extraction prompt sent to agent.", "info");
+        const result = await runExtraction(pi, ctx, r.vaultRoot, r.config, "manual", undefined, deep);
+        
+        if (result === "sent") {
+          pi.appendEntry("memory-extractor-state", {
+            lastExtractedAt: Date.now(),
+            lastExtractedEvent: deep ? "manual_deep" : "manual",
+          } satisfies ExtractorState);
+          ctx.ui.notify("[Memory Extractor] Extraction prompt sent to agent.", "info");
+        } else if (result === "empty") {
+          ctx.ui.notify("[Memory Extractor] Nothing new to extract from this session history.", "info");
+        } else {
+          ctx.ui.notify("[Memory Extractor] Extraction failed to render or send.", "error");
+        }
       } catch (err) {
         ctx.ui.notify(`[Memory Extractor] Extraction failed: ${(err as Error).message}`, "error");
       } finally {
@@ -314,17 +374,24 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       const r = ensureResolved(ctx.cwd);
       const label = params.reason ?? (params.deep ? "llm_requested_deep" : "llm_requested");
-      await runExtraction(pi, ctx, r.vaultRoot, r.config, label, undefined, !!params.deep, state);
+      
+      const result = await runExtraction(pi, ctx, r.vaultRoot, r.config, label, undefined, !!params.deep);
 
-      pi.appendEntry("memory-extractor-state", {
-        lastExtractedAt: Date.now(),
-        lastExtractedEvent: label,
-      } satisfies ExtractorState);
-
-      return {
-        content: [{ type: "text", text: "Extraction prompt queued. The agent will analyze the session and append findings to the daily log." }],
-        details: { triggeredBy: label },
-      };
+      if (result === "sent") {
+        pi.appendEntry("memory-extractor-state", {
+          lastExtractedAt: Date.now(),
+          lastExtractedEvent: label,
+        } satisfies ExtractorState);
+        return {
+          content: [{ type: "text", text: "Extraction prompt queued. The agent will analyze the session and append findings to the daily log." }],
+          details: { triggeredBy: label, status: "sent" },
+        };
+      } else {
+        return {
+          content: [{ type: "text", text: result === "empty" ? "No significant new knowledge found to extract." : "Extraction failed." }],
+          details: { triggeredBy: label, status: result },
+        };
+      }
     },
   });
 
@@ -358,6 +425,36 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // --- Tool: cleanup_knowledge_vault ---
+  pi.registerTool({
+    name: "cleanup_knowledge_vault",
+    label: "Cleanup Knowledge Vault",
+    description:
+      "Move articles older than 6 months from concepts/, connections/, and qa/ into the archive/ folder.",
+    promptSnippet: "Move old knowledge base articles to the archive",
+    parameters: Type.Object({}) as any,
+    async execute(_toolCallId, _params: any, _signal, _onUpdate, ctx) {
+      const r = ensureResolved(ctx.cwd);
+      
+      const toArchive = getArticlesToArchive(r.vaultRoot, r.config);
+      if (toArchive.length === 0) {
+        return {
+          content: [{ type: "text", text: "No articles older than 6 months found. Clean as a whistle!" }],
+          details: { found: 0 },
+        };
+      }
+
+      const archivedCount = archiveArticles(r.vaultRoot, r.config, toArchive);
+      
+      ctx.ui.notify(`[Memory Extractor] Archived ${archivedCount} old knowledge articles.`, "info");
+      
+      return {
+        content: [{ type: "text", text: `Successfully archived ${archivedCount} article(s).` }],
+        details: { archived: archivedCount, paths: toArchive },
+      };
+    },
+  });
+
   // --- Tool: search_knowledge ---
   pi.registerTool({
     name: "search_knowledge",
@@ -371,7 +468,10 @@ export default function (pi: ExtensionAPI) {
       const kbDir = path.join(r.vaultRoot, r.config.KNOWLEDGE);
 
       if (!fs.existsSync(kbDir)) {
-        return { content: [{ type: "text", text: "Knowledge base directory not found." }] };
+        return {
+          content: [{ type: "text", text: "Knowledge base directory not found." }],
+          details: {},
+        };
       }
 
       const indexPath = path.join(kbDir, "index.md");
@@ -388,10 +488,15 @@ export default function (pi: ExtensionAPI) {
       }
 
       return {
-        content: [{
-          type: "text",
-          text: results || "No direct matches found in the index. Try a different keyword or check recent logs.",
-        }],
+        content: [
+          {
+            type: "text",
+            text:
+              results ||
+              "No direct matches found in the index. Try a different keyword or check recent logs.",
+          },
+        ],
+        details: { query: params.query },
       };
     },
   });
@@ -412,11 +517,17 @@ export default function (pi: ExtensionAPI) {
       for (const cat of categories) {
         const filePath = path.join(kbDir, cat, `${params.slug}.md`);
         if (fs.existsSync(filePath)) {
-          return { content: [{ type: "text", text: fs.readFileSync(filePath, "utf-8") }] };
+          return {
+            content: [{ type: "text", text: fs.readFileSync(filePath, "utf-8") }],
+            details: { slug: params.slug, category: cat },
+          };
         }
       }
 
-      return { content: [{ type: "text", text: `Article '${params.slug}' not found.` }] };
+      return {
+        content: [{ type: "text", text: `Article '${params.slug}' not found.` }],
+        details: { slug: params.slug, found: false },
+      };
     },
   });
 

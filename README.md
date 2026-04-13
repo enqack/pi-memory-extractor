@@ -6,7 +6,9 @@ A knowledge-management extension for the [Pi AI Agent](https://github.com/badlog
 
 ## The Core Pipeline
 
-The extension operates on a continuous **Capture → Distill → Inject** cycle:
+1. **Structural-Based Truncation**: We have moved away from brittle, character-count-based truncation. The new logic uses a robust, structural method based on counting paragraphs and logical parts to ensure complete, well-formed Markdown output.
+2. **Enhanced Resilience**: This structural approach significantly improves the resilience of handling exceptionally long transcripts and complex tool result previews, preventing data loss or malformed output.
+3. **Pipeline Robustness**: These changes collectively lead to a significantly more robust and reliable knowledge extraction pipeline, ensuring high-quality knowledge is captured in every session.
 
 1. **Injection**: At session start, the extension injects the most recent entries from the knowledge base index and instructs the agent on how to retrieve deeper history on demand.
 2. **Capture**: During the session (at checkpoints, compaction, and shutdown), discoveries are extracted into `daily/YYYY-MM-DD.md`.

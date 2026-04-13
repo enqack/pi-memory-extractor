@@ -84,3 +84,31 @@ function readJsonFile(filePath: string): Partial<PiMemoryConfig> {
   }
   return {};
 }
+
+/**
+ * Ensures the basic vault directory structure exists.
+ * Returns true if any directories were created.
+ */
+export function ensureVaultStructure(vaultRoot: string, config: PiMemoryConfig): boolean {
+  let created = false;
+  const dirs = [
+    vaultRoot,
+    path.join(vaultRoot, config.DAILY),
+    path.join(vaultRoot, config.KNOWLEDGE),
+    path.join(vaultRoot, config.KNOWLEDGE, "concepts"),
+    path.join(vaultRoot, config.KNOWLEDGE, "connections"),
+    path.join(vaultRoot, config.KNOWLEDGE, "qa"),
+    path.join(vaultRoot, config.KNOWLEDGE, "archive"),
+    path.join(vaultRoot, config.DEEP_THOUGHTS),
+    path.join(vaultRoot, config.REPORTS),
+  ];
+
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      created = true;
+    }
+  }
+
+  return created;
+}

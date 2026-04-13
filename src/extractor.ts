@@ -7,21 +7,43 @@ import type {
   SessionEntry,
   SessionHeader,
 } from "@mariozechner/pi-coding-agent";
-import { parseSessionEntries, migrateSessionEntries } from "@mariozechner/pi-coding-agent";
 import { PiMemoryConfig } from "./config.js";
 import { TODAY } from "./utils.js";
+import { renderTemplate } from "./templates.js";
 
 /**
- * extractor.ts — Session knowledge extraction module.
- * Serializes the session transcript and triggers the LLM via pi.sendUserMessage().
+ * Extraction limits to keep the context window stable.
  */
+const EXTRACTION_LIMITS = {
+  MAX_HISTORY_MESSAGES: 50,
+  MAX_MESSAGE_CHARS: 1000,
+  MAX_TOOL_RESULT_CHARS: 200,
+  MAX_PARTS_PER_MESSAGE: 15,
+  GLOBAL_MAX_CHARS: 25000,
+};
 
 /**
- * Resolves the path to deep-thoughts-criteria.md relative to this file.
+ * Parses a session .jsonl file into an array of entries.
  */
-function getCriteriaPath(): string {
-  // Use __dirname for CJS (jiti)
-  return path.join(__dirname, "deep-thoughts-criteria.md");
+function parseSessionEntries(content: string): any[] {
+  return content
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch (e) {
+        return null;
+      }
+    })
+    .filter((e) => e !== null);
+}
+
+/**
+ * Simple migration helper to ensure old session entries remain compatible.
+ */
+function migrateSessionEntries(entries: any[]): void {
+  // No-op for modern ExtensionAPI sessions
 }
 
 /**
@@ -34,14 +56,18 @@ function getMessageTextTruncated(content: any, max: number): string {
   }
   if (Array.isArray(content)) {
     let result = "";
+    let partsCount = 0;
     for (const part of content) {
       if (part.type === "text" && typeof part.text === "string") {
+        if (partsCount >= EXTRACTION_LIMITS.MAX_PARTS_PER_MESSAGE) break;
+
         const remaining = max - result.length;
         if (part.text.length > remaining) {
           result += part.text.slice(0, remaining) + "… [truncated]";
           return result;
         }
         result += part.text;
+        partsCount++;
       }
     }
     return result;
@@ -51,12 +77,13 @@ function getMessageTextTruncated(content: any, max: number): string {
 
 /**
  * Serialize the session branch to a compact, filtered transcript.
- * Includes user messages, assistant text, and condensed tool results.
- * Skips raw tool call arguments and internal extension messages.
+ * Strict limits are applied to prevent recursive compaction loops.
  */
 export function serializeTranscript(entries: SessionEntry[]): string {
-  // Cap history processing to the last 200 entries to ensure responsiveness
-  const history = entries.length > 200 ? entries.slice(-200) : entries;
+  // Strict Limit: Only the last N messages to keep context window clean
+  const history = entries.length > EXTRACTION_LIMITS.MAX_HISTORY_MESSAGES
+    ? entries.slice(-EXTRACTION_LIMITS.MAX_HISTORY_MESSAGES)
+    : entries;
   const lines: string[] = [];
 
   for (const entry of history) {
@@ -64,23 +91,31 @@ export function serializeTranscript(entries: SessionEntry[]): string {
     const msg = entry.message;
 
     if (msg.role === "user") {
-      // Skip extension-injected context messages (they have a customType)
       if ((msg as any).customType) continue;
-      const text = getMessageTextTruncated(msg.content, 2000);
+      // Strict Limit: user messages
+      const text = getMessageTextTruncated(msg.content, EXTRACTION_LIMITS.MAX_MESSAGE_CHARS);
       if (text.trim()) lines.push(`USER: ${text.trim()}`);
     } else if (msg.role === "assistant") {
-      const text = getMessageTextTruncated(msg.content, 2000);
+      // Strict Limit: assistant messages
+      const text = getMessageTextTruncated(msg.content, EXTRACTION_LIMITS.MAX_MESSAGE_CHARS);
       if (text.trim()) lines.push(`ASSISTANT: ${text.trim()}`);
     } else if (msg.role === "toolResult") {
-      // Condense tool results to 500 chars max
-      const preview = getMessageTextTruncated(msg.content, 500);
+      // Tool results limit
+      const preview = getMessageTextTruncated(msg.content, EXTRACTION_LIMITS.MAX_TOOL_RESULT_CHARS);
       if (preview.trim()) {
         lines.push(`TOOL(${(msg as any).toolName ?? "unknown"}): ${preview.trim()}`);
       }
     }
   }
 
-  return lines.join("\n\n");
+  const result = lines.join("\n\n");
+
+  // Final safety cap: truncate entire transcript if it exceeds the global safe budget
+  if (result.length > EXTRACTION_LIMITS.GLOBAL_MAX_CHARS) {
+    return result.slice(0, EXTRACTION_LIMITS.GLOBAL_MAX_CHARS) + "\n\n... [Transcript truncated for size stability] ...";
+  }
+
+  return result;
 }
 
 /**
@@ -92,7 +127,7 @@ export async function serializeDeepTranscript(ctx: ExtensionContext): Promise<st
   try {
     files = (await fsPromises.readdir(sessionDir)).filter((f) => f.endsWith(".jsonl"));
   } catch {
-    return ""; // No sessions found
+    return "";
   }
 
   const allTranscripts: string[] = [];
@@ -104,11 +139,8 @@ export async function serializeDeepTranscript(ctx: ExtensionContext): Promise<st
       const allEntries = parseSessionEntries(content);
       migrateSessionEntries(allEntries);
 
-      // Header is the first entry
       const header = allEntries[0] as SessionHeader;
       const sessionDate = new Date(header.timestamp).toLocaleString();
-
-      // Filter out the header before serializing transcript
       const sessionEntries = allEntries.filter((e) => e.type !== "session") as SessionEntry[];
       const transcript = serializeTranscript(sessionEntries);
 
@@ -125,54 +157,6 @@ export async function serializeDeepTranscript(ctx: ExtensionContext): Promise<st
 }
 
 /**
- * Build the extraction prompt for the LLM.
- */
-function buildExtractionPrompt(
-  projectRoot: string,
-  vaultRoot: string,
-  config: PiMemoryConfig,
-  transcript: string,
-  deepThoughtsCriteria: string
-): string {
-  const today = TODAY();
-  const dailyLogPath = path.join(vaultRoot, config.DAILY, `${today}.md`);
-  const dailyLogRelPath = path.relative(projectRoot, dailyLogPath);
-
-  return `**CRITICAL: YOU MUST EXECUTE REAL TOOL CALLS.**
-DO NOT just print text describing your plan. You MUST call the \`write\` or \`edit\` tool to update the daily log. If you do not execute the file operation, you have failed the task.
-
-**Context:**
-- Project Root: \`${projectRoot}\`
-- Daily Log (Absolute): \`${dailyLogPath}\`
-- Daily Log (Relative): \`${dailyLogRelPath}\`
-
-Your job: identify and summarize what is worth remembering from this conversation and append it to the daily log at \`${dailyLogPath}\`.
-
-**Save to the daily log if the conversation contains:**
-1. **Decisions**: Design choices, changed requirements, or confirmed plans.
-2. **Key Findings**: Bug root causes, successful techniques, or learned patterns.
-3. **Draft Documentation**: Explanations or code snippets that should move to the vault later.
-4. **Deep Thoughts**: Abstract or theoretical insights that meet these criteria: ${deepThoughtsCriteria}
-
-**Submission Rules:**
-1. **Append Only**: Use the \`edit\` or \`write\` tool to add a new section for this session. Use the ABSOLUTE path: \`${dailyLogPath}\`.
-2. **Structure**: 
-   ### Session Knowledge — ${today}
-   - **Decisions**: ...
-   - **Key Findings & Learnings**: ...
-   - **Deep Thoughts**: ...
-3. **No Chatting**: DO NOT just output the summary in the chat. You MUST execute the tool call to save it to \`${dailyLogPath}\`.
-
-BEGIN by identifying the knowledge from the transcript below and then calling the \`edit\` or \`write\` tool.
-
----
-
-Here is the conversation transcript:
-
-${transcript}`;
-}
-
-/**
  * Main extraction entry point.
  */
 export async function runExtraction(
@@ -180,76 +164,108 @@ export async function runExtraction(
   ctx: ExtensionContext,
   vaultRoot: string,
   config: PiMemoryConfig,
-  triggerEvent: string,
-  providedTranscript?: string,
-  deep?: boolean,
-  state?: { isCompacting: boolean }
-): Promise<void> {
-  let transcript: string;
-  if (providedTranscript) {
-    transcript = providedTranscript;
-  } else if (deep) {
-    transcript = await serializeDeepTranscript(ctx);
-  } else {
-    transcript = serializeTranscript(ctx.sessionManager.getBranch());
+  label: string,
+  transcript?: string,
+  deep: boolean = false,
+): Promise<"sent" | "empty" | "failed"> {
+  const finalTranscript =
+    transcript ??
+    (deep
+      ? await serializeDeepTranscript(ctx)
+      : serializeTranscript(ctx.sessionManager.getBranch()));
+
+  if (!finalTranscript.trim()) {
+    return "empty";
   }
 
-  if (!transcript.trim()) {
-    return; // Nothing to extract
+  // Sanitization: Prevent the transcript from escaping our XML-style data tags
+  const sanitizedTranscript = finalTranscript.replace(/<\/transcript_data>/g, "</TRANSCRIPT_DATA_ESCAPED>");
+
+  let deepThoughtsCriteria = "Be concise and capture key technical decisions.";
+  try {
+    const criteriaPath = path.join(__dirname, "prompts", "deep-thoughts-criteria.md");
+    if (fs.existsSync(criteriaPath)) {
+      deepThoughtsCriteria = fs.readFileSync(criteriaPath, "utf-8");
+    }
+  } catch (err) {
+    console.error(`[Memory Extractor] Failed to read criteria: ${err}`);
   }
 
-  // If this is triggered by a lifecycle event (compaction/shutdown),
-  // we must escape the current turn and wait for the agent to be idle
-  // to avoid "Agent is already processing a prompt" errors.
-  const isLifecycleEvent = triggerEvent === "pre_compact" || triggerEvent === "shutdown";
-  if (isLifecycleEvent) {
-    // Escape the hook's execution context
-    setTimeout(async () => {
-      try {
-        // Defensive wait: check if native waitForIdle is available (it's only in CommandContext)
-        // otherwise poll isIdle()
-        if (typeof (ctx as any).waitForIdle === "function") {
-          await (ctx as any).waitForIdle();
-        }
-        
-        // Polling loop: wait while agent is streaming OR in a critical lifecycle phase (compaction)
-        while (!ctx.isIdle() || state?.isCompacting) {
+  const today = new Date().toISOString().split("T")[0];
+  // Calculate a unique time suffix: XXXX-MM-DD-HH-MM-SS
+  const timeSuffix = new Date().toISOString().split("T")[1].replace(/:/g, "-").replace(/:/g, "-").substring(0, 7);
+
+  const dailyLogPath = path.join(vaultRoot, config.DAILY, `${today}.md`);
+  const dailyLogRelPath = path.relative(ctx.cwd, dailyLogPath);
+
+  // *** MODIFIED: Deep Thought Path incorporates time for uniqueness ***
+  const deepThoughtsFile = path.join(vaultRoot, config.DEEP_THOUGHTS, `${today}-${timeSuffix}-deep-thought.md`);
+  const deepThoughtsRelPath = path.relative(ctx.cwd, deepThoughtsFile);
+
+  // 1. Construct the prompt for the primary daily knowledge log (Concept/General)
+  // This prompt captures the standard daily summary artifact.
+  const dailyPrompt = renderTemplate("extraction", {
+    projectRoot: ctx.cwd,
+    vaultRoot,
+    dailyLogPath,
+    dailyLogRelPath,
+    deepThoughtsCriteria,
+    today,
+    transcript: sanitizedTranscript,
+  });
+
+  // 2. Check for the presence of deep thought data to generate a secondary artifact
+  let deepThoughtPrompt = "";
+  let deepThoughtTriggered = false;
+
+  // The YAML marker "[[deep_thought]]" is the deterministic signal we look for.
+  if (deep && finalTranscript.includes("[[deep_thought]]")) {
+    deepThoughtTriggered = true;
+    // The template uses the updated deepThoughtsFile and deepThoughtsRelPath
+    deepThoughtPrompt = renderTemplate("extraction", {
+      projectRoot: ctx.cwd,
+      vaultRoot,
+      dailyLogPath, // Still passed for context consistency in the template render call
+      dailyLogRelPath,
+      deepThoughtsFile,
+      deepThoughtsRelPath,
+      deepThoughtsCriteria,
+      today,
+      transcript: sanitizedTranscript,
+    });
+  }
+
+  // 3. Execute both extractions sequentially in a delayed process
+  // We enqueue this first so it runs regardless of deep thought status.
+
+  // Wait for agent idle state before sending follow-up
+  setTimeout(async () => {
+    try {
+      while (!ctx.isIdle()) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      // A. Send Daily Log Injection (Always runs)
+      await pi.sendUserMessage(dailyPrompt, {
+        deliverAs: "followUp",
+      });
+
+      // B. Send Deep Thought Injection (Conditional)
+      if (deepThoughtTriggered && deepThoughtPrompt) {
+        // Must wait for the first turn to finish before triggering the second
+        while (!ctx.isIdle()) {
           await new Promise((r) => setTimeout(r, 100));
         }
-        await executeExtraction(pi, ctx, vaultRoot, config, triggerEvent, transcript);
-      } catch (err) {
-        console.error(`[Memory Extractor] Delayed extraction failed: ${err}`);
+
+        await pi.sendUserMessage(deepThoughtPrompt, {
+          deliverAs: "followUp",
+        });
       }
-    }, 100);
-    return;
-  }
+    } catch (err) {
+      console.error(`[Memory Extractor] Failed to trigger follow-up: ${err}`);
+      ctx.ui.notify("[Memory Extractor] Failed to trigger extraction prompt.", "error");
+    }
+  }, 100);
 
-  await executeExtraction(pi, ctx, vaultRoot, config, triggerEvent, transcript);
-}
-
-/**
- * Internal helper to build prompt and send the message.
- */
-async function executeExtraction(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  vaultRoot: string,
-  config: PiMemoryConfig,
-  triggerEvent: string,
-  transcript: string
-): Promise<void> {
-  let deepThoughtsCriteria = "";
-  const criteriaPath = getCriteriaPath();
-  try {
-    deepThoughtsCriteria = await fsPromises.readFile(criteriaPath, "utf-8");
-  } catch {
-    // Ignore if file doesn't exist
-  }
-
-  const prompt = buildExtractionPrompt(ctx.cwd, vaultRoot, config, transcript, deepThoughtsCriteria);
-
-  await pi.sendUserMessage(
-    `[Memory Extractor — triggered by: ${triggerEvent}]\n\n${prompt}`,
-    { deliverAs: "followUp" }
-  );
+  return "sent";
 }

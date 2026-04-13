@@ -5,11 +5,13 @@
   "main": "src/index.ts",
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "latest",
+    "@types/handlebars": "^4.0.40",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.32.0"
+    "@sinclair/typebox": "^0.32.0",
+    "handlebars": "^4.7.9"
   },
   "pi": {
     "extensions": [
