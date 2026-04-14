@@ -17,10 +17,13 @@ Unlike basic extraction methods, this extension uses a **Multi-Step Memory Orche
 ## Core Features
 
 ### 🧠 Orchestrated Knowledge Extraction
-Automatically triggers during session compaction or shutdown, or manually via commands. The orchestrator maintains state across turns, guiding the agent through the extraction steps.
+Automatically triggers during session compaction or shutdown, or manually via commands. The `MemoryOrchestrator` maintains state across turns, guiding the agent through the extraction steps. It uses the `agent_end` event to advance the workflow automatically after each response.
 
-### 🔍 Smart Context Injection
-At session start, the extension injects a summary of the most recent knowledge index and uses **Semantic Recall** to surface relevant articles from the knowledge base based on the initial conversation topics.
+### 💭 Deep Thoughts
+Captured via `[[deep_thought: Topic]]` markers during the analysis phase. These represent absurdist, meta-cognitive reflections on the coding process or session context, stored as individual files in the `deep-thoughts/` directory.
+
+### 🔍 Smart Context Injection & Recall
+At session start, the extension injects a summary of the most recent knowledge index. It also uses **Smart Recall**—a keyword-based scoring system—to surface relevant article summaries from the knowledge base based on the initial conversation history.
 
 ### 🏗️ Robust Knowledge Compiler
 Compiles daily logs into a structured, tiered knowledge base (Concepts, Connections, Q&A, Lessons Learned, and Cursed Knowledge). It uses incremental logic to only process new logs unless the `--force` flag is used.
@@ -61,7 +64,9 @@ project-root/
 
 ## Technical Notes
 
-- **Multi-Step Orchestration**: Uses the `MemoryOrchestrator` to manage stateful extraction workflows across multiple agent turns, storing progress in the session history.
+- **Multi-Step Orchestration**: Uses the `MemoryOrchestrator` to manage stateful extraction workflows across multiple agent turns, storing progress in the session history and using the `agent_end` event for progression.
+- **Interactive Visualization**: The `submit_knowledge_synthesis` tool provides a custom TUI (`SynthesisTabs`) for reviewing extracted themes, relationships, and takeaways.
+- **Thread-Safe Writes**: Uses `withFileMutationQueue` to ensure that concurrent tool executions or automated triggers don't corrupt the knowledge vault.
 - **Smart Recall Heuristics**: Uses a lightweight keyword-based scoring system to find relevant articles in the `index.md` based on recent conversation history, injecting summaries to provide context.
 - **Structural Integrity**: Actively repairs and enforces Obsidian-compatible YAML frontmatter in knowledge articles.
 - **Cascading Configuration**: Supports a three-tiered configuration system (System → User → Project) via `pi-memory.json`.
@@ -88,10 +93,10 @@ The extension registers several tools that can be invoked by the agent or manual
 |------|-------------|
 | `extract_knowledge` | Triggers the orchestrated extraction workflow. Supports `deep` mode. |
 | `compile_knowledge` | Triggers the compilation of daily logs. |
-| `submit_knowledge_synthesis` | **(Internal)** Used by the orchestrator to commit final synthesized knowledge. |
+| `submit_knowledge_synthesis` | **(Internal)** Used by the orchestrator to commit final synthesized knowledge. Renders interactive `SynthesisTabs`. |
 | `cleanup_knowledge_vault` | Archives articles older than 6 months. |
 | `search_knowledge` | Search the knowledge base index for specific keywords. |
-| `read_knowledge_article` | Read the full content of a specific knowledge article. |
+| `read_knowledge_article` | Read the full content of a specific knowledge article by its slug. |
 
 ---
 
