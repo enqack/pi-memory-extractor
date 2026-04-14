@@ -239,7 +239,9 @@ export class MemoryOrchestrator {
     }
 
     // Formatting the daily log entry
-    content += `\n### 🧠 Automated Extraction (${this.state.trigger}) — ${new Date().toLocaleTimeString()}\n`;
+    const now = new Date();
+    const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    content += `\n### 🧠 Automated Extraction (${this.state.trigger}) — ${timeString}\n`;
     content += `**Title:** ${data.knowledge_title}\n\n`;
     content += `#### Summary\n${data.source_summary}\n\n`;
     
@@ -266,8 +268,9 @@ export class MemoryOrchestrator {
       // Write Deep Thoughts
       if (data.deep_thoughts && data.deep_thoughts.length > 0) {
         for (const dt of data.deep_thoughts) {
+          const now = new Date();
           const slug = dt.topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-          const timeSuffix = new Date().toISOString().split("T")[1].replace(/:/g, "-").substring(0, 5);
+          const timeSuffix = `${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
           const dtFilename = `${today}-${timeSuffix}-${slug}.md`;
           const dtPath = path.join(this.vaultRoot, this.config.DEEP_THOUGHTS, dtFilename);
 

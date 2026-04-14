@@ -1,3 +1,8 @@
+---
+name: memory-extractor
+description: Extracts session insights into structured knowledge using an orchestrated workflow. Use for saving technical discoveries, entities, and relationships to a permanent vault.
+---
+
 # Skill: Memory Extractor
 
 The Memory Extractor skill allows you to transform session insights into long-term structured knowledge. It uses a multi-step orchestrated workflow to ensure high-fidelity capture.

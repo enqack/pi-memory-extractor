@@ -3,10 +3,14 @@ import * as path from "node:path";
 import { PiMemoryConfig } from "./config.js";
 
 /**
- * Returns today's date (YYYY-MM-DD).
+ * Returns today's date in the system's local timezone (YYYY-MM-DD).
  */
 export function TODAY(): string {
-  return new Date().toISOString().split("T")[0];
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /**
