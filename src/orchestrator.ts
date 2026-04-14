@@ -11,7 +11,7 @@ import { renderTemplate } from "./templates.js";
 import { TODAY } from "./utils.js";
 import { loadPromptRaw } from "./templates.js";
 
-export type WorkflowStep = "analysis" | "mapping" | "synthesis" | "idle";
+export type WorkflowStep = "analysis" | "mapping" | "synthesis" | "resolution" | "idle";
 
 export interface WorkflowState {
   step: WorkflowStep;
@@ -157,10 +157,6 @@ export class MemoryOrchestrator {
   public async processStepResult(ctx: ExtensionContext, result: any) {
     if (this.state.step === "idle") return;
 
-    // In this orchestrated model, Step 3 is the only one that uses the tool for now,
-    // as Step 1 & 2 are internal LLM reasoning steps.
-    // However, if we wanted to enforce tool calls at each step, we'd handle them here.
-
     if (this.state.step === "analysis") {
         this.state.collectedData.themes = result.themes;
         this.state.step = "mapping";
@@ -169,12 +165,57 @@ export class MemoryOrchestrator {
         this.state.step = "synthesis";
     } else if (this.state.step === "synthesis") {
         this.state.collectedData.synthesis = result;
+        
+        // Detect Conflicts before finalizing
+        const conflicts = await this.detectConflicts(ctx, result);
+        if (conflicts.length > 0) {
+            console.log(`[MemoryOrchestrator] Detected ${conflicts.length} conflict(s). Entering resolution step.`);
+            this.state.step = "resolution";
+            (this.state.collectedData as any).conflicts = conflicts;
+        } else {
+            await this.finalizeWorkflow(ctx);
+            return;
+        }
+    } else if (this.state.step === "resolution") {
+        // Assume the agent has communicated with the user and the synthesis is now "resolved"
+        // In a real scenario, we might want to update the synthesis data based on the resolution turn.
+        // For now, we'll just allow it to finalize.
         await this.finalizeWorkflow(ctx);
         return;
     }
 
     this.persistState();
     await this.triggerNextStep(ctx);
+  }
+
+  /**
+   * Scans existing knowledge for potential conflicts.
+   */
+  private async detectConflicts(ctx: ExtensionContext, synthesis: any): Promise<string[]> {
+    if (!this.config || !this.vaultRoot) return [];
+    
+    const indexPath = path.join(this.vaultRoot, this.config.KNOWLEDGE, "index.md");
+    if (!fs.existsSync(indexPath)) return [];
+
+    const indexContent = fs.readFileSync(indexPath, "utf-8");
+    const conflicts: string[] = [];
+
+    for (const theme of synthesis.themes || []) {
+        // Simple heuristic: if the theme title exists in the index, it's a potential update/conflict
+        if (indexContent.toLowerCase().includes(`[[${theme.theme.toLowerCase()}]]`)) {
+            // Check memory_type - certain types (preference, fact) are more prone to conflict
+            if (theme.memory_type === "preference" || theme.memory_type === "fact") {
+                // If confidence is low, we definitely want a resolution turn
+                if (theme.confidence < 0.7) {
+                    conflicts.push(`Potential update for existing memory [[${theme.theme}]] (Type: ${theme.memory_type}, Confidence: ${theme.confidence})`);
+                } else {
+                    console.log(`[MemoryOrchestrator] Existing memory found for [[${theme.theme}]], but confidence is high (${theme.confidence}). Treating as reinforcement.`);
+                }
+            }
+        }
+    }
+
+    return conflicts;
   }
 
   /**
@@ -200,6 +241,9 @@ export class MemoryOrchestrator {
         deepThoughts: this.state.collectedData.deepThoughts,
         transcript: this.state.transcript
       });
+    } else if (this.state.step === "resolution") {
+      const conflicts = (this.state.collectedData as any).conflicts || [];
+      prompt = `### KNOWLEDGE EXTRACTION PHASE: CONFLICT RESOLUTION ###\n\n**TASK:** I detected potential conflicts or updates to existing knowledge. Please discuss these with the user and determine if we should update the existing entries or if this is a new, separate observation.\n\n**DETECTED CONFLICTS:**\n${conflicts.map((c: string) => `- ${c}`).join("\n")}\n\nOnce resolved, summarize the conclusion for the user and then call 'submit_knowledge_synthesis' AGAIN with the final, resolved data to commit it.`;
     }
 
     if (!prompt) return;
@@ -248,6 +292,7 @@ export class MemoryOrchestrator {
     content += `#### Themes\n`;
     for (const t of data.themes || []) {
         content += `- **${t.theme}**: ${t.summary}\n`;
+        content += `  - Type: \`${t.memory_type}\` | Confidence: \`${t.confidence}\` | Reinforced: \`${today}\`\n`;
     }
 
     content += `\n#### Relationships\n`;

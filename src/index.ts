@@ -304,9 +304,26 @@ export default function (pi: ExtensionAPI) {
   // --- agent_end ---
   pi.on("agent_end", async (event, ctx) => {
     const state = orchestrator.getState();
+    const branch = ctx.sessionManager.getBranch();
+    const lastAssistantMsg = [...branch].reverse().find(e => e.type === "message" && e.message.role === "assistant");
+    
     // If we are in analysis or mapping, we advance automatically after the agent finishes its response
     if (state.step === "analysis" || state.step === "mapping") {
         await orchestrator.advanceWorkflow(ctx);
+    } else if (state.step === "idle" && lastAssistantMsg) {
+        // Reactive Trigger: Detect Self-Correction or Explicit Decisions
+        const content = typeof lastAssistantMsg.message.content === "string" 
+          ? lastAssistantMsg.message.content 
+          : JSON.stringify(lastAssistantMsg.message.content);
+        
+        const hasCorrection = /correction|actually|instead|wait|correction:|self-correction/i.test(content);
+        const hasDecision = /decided|decision|settled on|from now on|policy/i.test(content);
+        
+        if (hasCorrection || hasDecision) {
+            console.log(`[Memory Extractor] Reactive trigger hit (Correction: ${hasCorrection}, Decision: ${hasDecision}). Starting extraction.`);
+            const transcript = serializeTranscript(branch);
+            orchestrator.startExtraction(ctx, hasCorrection ? "reactive_correction" : "reactive_decision", transcript, false).catch(() => {});
+        }
     }
   });
 
@@ -392,13 +409,16 @@ export default function (pi: ExtensionAPI) {
       source_summary: Type.String({ description: "Concise summary of learnings" }),
       themes: Type.Array(Type.Object({
         theme: Type.String(),
-        summary: Type.String()
+        summary: Type.String(),
+        confidence: Type.Number({ minimum: 0, maximum: 1, default: 0.8, description: "Confidence score (0.0 - 1.0)" }),
+        memory_type: StringEnum(["fact", "preference", "goal", "correction", "pattern"] as const, { description: "Type of memory extracted" })
       })),
       relationships: Type.Array(Type.Object({
         entity_a: Type.String(),
         relationship_type: Type.String(),
         entity_b: Type.String(),
-        evidence_quote: Type.String()
+        evidence_quote: Type.String(),
+        confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1, default: 0.8 }))
       })),
       actionable_takeaways: Type.Array(Type.Object({
         priority: StringEnum(["High", "Medium", "Low"] as const, { description: "High, Medium, or Low" }),

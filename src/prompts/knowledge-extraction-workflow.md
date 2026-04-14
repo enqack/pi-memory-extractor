@@ -28,11 +28,21 @@ Generate ONLY a single, valid JSON object that adheres strictly to this schema. 
   "knowledge_title": "A synthesized, descriptive title for the knowledge article.",
   "source_summary": "A 2-3 sentence summary of the overall learning derived from the context.",
   "themes": [
-    {"theme": "Theme Name from Step 1", "summary": "One sentence summary."},
-    // ... include 2 more themes
+    {
+      "theme": "Theme Name from Step 1",
+      "summary": "One sentence summary.",
+      "confidence": 0.9,
+      "memory_type": "fact|preference|goal|correction|pattern"
+    }
   ],
   "relationships": [
-    {"entity_a": "Name A", "relationship_type": "Verb/Action", "entity_b": "Name B", "evidence_quote": "Quoted snippet supporting this link."}
+    {
+      "entity_a": "Name A",
+      "relationship_type": "Verb/Action",
+      "entity_b": "Name B",
+      "evidence_quote": "Quoted snippet supporting this link.",
+      "confidence": 0.8
+    }
   ],
   "actionable_takeaways": [
     {"priority": "High|Medium|Low", "action": "Specific task derived from the context", "owner": "Assigned party or 'Team'"}

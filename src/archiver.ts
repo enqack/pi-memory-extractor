@@ -26,8 +26,14 @@ export function getArticlesToArchive(
       const filePath = path.join(catDir, file);
       try {
         const stat = fs.statSync(filePath);
-        if (now - stat.mtimeMs > SIX_MONTHS_MS) {
-          toArchive.push(`${cat}/${file}`);
+        const content = fs.readFileSync(filePath, "utf-8");
+        const confidenceMatch = content.match(/^confidence:\s*([\d.]+)/m);
+        const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 1.0;
+
+        if (confidence <= 0) {
+            toArchive.push(`${cat}/${file}:faded`);
+        } else if (now - stat.mtimeMs > SIX_MONTHS_MS) {
+            toArchive.push(`${cat}/${file}:stale`);
         }
       } catch {
         // Skip inaccessible files
@@ -55,11 +61,17 @@ export function archiveArticles(
   }
 
   let count = 0;
-  for (const relPath of articles) {
+  for (const item of articles) {
+    const [relPath, type] = item.split(":");
     const srcPath = path.join(kbDir, relPath);
-    // relPath is like 'concepts/some-file.md', we want 'archive/some-file.md'
     const fileName = path.basename(relPath);
-    const destPath = path.join(archiveDir, fileName);
+    
+    const targetDir = type === "faded" ? path.join(archiveDir, "faded") : archiveDir;
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    
+    const destPath = path.join(targetDir, fileName);
 
     try {
       if (fs.existsSync(srcPath)) {

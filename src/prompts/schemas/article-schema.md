@@ -16,6 +16,9 @@ tags:
   - tag1
   - tag2
 date: YYYY-MM-DD
+last_reinforced: YYYY-MM-DD
+confidence: 0.9 # (0.0 - 1.0)
+memory_type: fact # fact | preference | goal | correction | pattern
 sources:
   - "daily-YYYY-MM-DD.md"
 wikilinks:

@@ -7,6 +7,7 @@ import type {
 import { PiMemoryConfig } from "./config.js";
 import { renderTemplate } from "./templates.js";
 import { getArticlesToArchive } from "./archiver.js";
+import { TODAY } from "./utils.js";
 
 /**
  * Parses knowledge/log.md to find which daily logs have already been compiled.
@@ -108,6 +109,7 @@ export async function runCompilation(
       relKnowledge,
       dailyLogs: logs.map((l) => `${relDaily}/${l}`),
       archiveList,
+      currentDate: TODAY(),
     });
 
     ctx.ui.notify(
@@ -135,6 +137,7 @@ export async function runCompilation(
   } catch (err) {
     console.error(`[Memory Compiler] Failed to render template: ${err}`);
     ctx.ui.notify("[Memory Compiler] Failed to render compilation prompt.", "error");
+    throw err;
   }
 }
 

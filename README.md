@@ -8,19 +8,25 @@ A knowledge-management extension for the [Pi AI Agent](https://github.com/badlog
 
 Unlike basic extraction methods, this extension uses a **Multi-Step Memory Orchestrator** to ensure high-fidelity knowledge capture. Every extraction goes through a mandatory 3-step workflow:
 
-1.  **Step 1: Analysis (Thematic Categorization)**: The agent identifies the three most dominant, recurring themes from the session.
+1.  **Step 1: Analysis (Thematic Categorization)**: The agent identifies dominant, recurring themes, assigning each a `memory_type` (Fact, Preference, Goal, Correction, Pattern) and a initial `confidence` score.
 2.  **Step 2: Mapping (Relationship Deep-Dive)**: The agent maps entities (Concepts, Products, People) and their explicit relationships (e.g., `[A] -> [Implemented via] -> [B]`).
-3.  **Step 3: Synthesis (Final Structured Output)**: The agent compiles the analysis and mapping into a structured JSON packet, which is then committed to the knowledge base via the `submit_knowledge_synthesis` tool.
+3.  **Step 3: Synthesis (Final Structured Output)**: The agent compiles the analysis and mapping into a structured JSON packet.
+4.  **Step 4: Resolution (Conflict Handling)**: If new insights conflict with existing high-confidence knowledge, the orchestrator pauses the workflow to resolve the discrepancy with the user before committing via the `submit_knowledge_synthesis` tool.
 
 ---
 
 ## Core Features
 
 ### 🧠 Orchestrated Knowledge Extraction
-Automatically triggers during session compaction or shutdown, or manually via commands. The `MemoryOrchestrator` maintains state across turns, guiding the agent through the extraction steps. It uses the `agent_end` event to advance the workflow automatically after each response.
+Automatically triggers during session compaction or shutdown, or manually via commands. It also features **Reactive Triggering**, which monitors the conversation for linguistic markers of self-correction (e.g., "actually", "wait") or explicit project decisions to initiate extraction autonomously.
+
+### ⏳ Knowledge Lifecycle & Decay
+Introduces a temporal dimension to memory. Each knowledge article tracks its `confidence` (0.0–1.0) and `last_reinforced` date.
+- **Reinforcement**: Active use or referencing of a memory during a session increases its confidence score.
+- **Decay**: Knowledge that is not reinforced during a 30-day compilation cycle suffers a confidence penalty (-0.1).
 
 ### 💭 Deep Thoughts
-Captured via `[[deep_thought: Topic]]` markers during the analysis phase. These represent absurdist, meta-cognitive reflections on the coding process or session context, stored as individual files in the `deep-thoughts/` directory.
+Captured via `[[deep_thought: Topic]]` markers during the analysis phase. These represent absurdist, meta-cognitive reflections on the coding process or session context, following the Jack Handey "Deep Thought" formula.
 
 ### 🔍 Smart Context Injection & Recall
 At session start, the extension injects a summary of the most recent knowledge index. It also uses **Smart Recall**—a keyword-based scoring system—to surface relevant article summaries from the knowledge base based on the initial conversation history.
@@ -29,7 +35,9 @@ At session start, the extension injects a summary of the most recent knowledge i
 Compiles daily logs into a structured, tiered knowledge base (Concepts, Connections, Q&A, Lessons Learned, and Cursed Knowledge). It uses incremental logic to only process new logs unless the `--force` flag is used.
 
 ### 🧹 Automatic Archiving
-Keeps the knowledge base fresh by automatically moving articles older than 6 months to the `archive/` directory during compilation or via the `cleanup_knowledge_vault` tool.
+Keeps the knowledge base fresh by automatically moving stale or "faded" information:
+- **Stale**: Articles older than 6 months are moved to the `archive/` directory.
+- **Faded**: Articles whose confidence drops to 0.0 due to lack of reinforcement are moved to `archive/faded/`.
 
 ### 🛠️ Automated Knowledge Guardrails
 Ensures the structural integrity of the knowledge base by intercepting `write` and `edit` calls to Markdown files. It automatically:
@@ -58,12 +66,16 @@ project-root/
         ├── lessons-learned/ # High-level project/task takeaways
         ├── cursed-knowledge/# Hard-to-fix or obscure technical issues
         └── archive/         # Stale knowledge (archived after 6 months)
+            └── faded/       # Knowledge that has decayed due to lack of reinforcement
 ```
 
 ---
 
 ## Technical Notes
 
+- **Reactive Extraction Heuristics**: Monitors the conversation stream for linguistic markers of "pivots" or "corrections" to capture state changes as they happen.
+- **Confidence-Based Persistence**: Implements a "forgetting" curve for low-utility knowledge, ensuring the active vault remains focused on currently relevant information.
+- **Conflict Resolution Logic**: Scans the knowledge index during synthesis to detect potential discrepancies with existing entries, enabling proactive reconciliation.
 - **Multi-Step Orchestration**: Uses the `MemoryOrchestrator` to manage stateful extraction workflows across multiple agent turns, storing progress in the session history and using the `agent_end` event for progression.
 - **Interactive Visualization**: The `submit_knowledge_synthesis` tool provides a custom TUI (`SynthesisTabs`) for reviewing extracted themes, relationships, and takeaways.
 - **Thread-Safe Writes**: Uses `withFileMutationQueue` to ensure that concurrent tool executions or automated triggers don't corrupt the knowledge vault.
