@@ -19,7 +19,12 @@ You will be given:
 2. `read` the knowledge index at `{{vaultRoot}}/knowledge/index.md` (if it exists) to understand what is already known.
 3. `read` today's daily log at `{{vaultRoot}}/daily/{{today}}.md` (if it exists) so you can append rather than overwrite.
 4. Write or append the daily log.
-5. For each significant insight, decision, or pattern: create or update a knowledge article.
+5. For each significant insight, decision, or pattern, create or update a knowledge article using this mandatory sub-process:
+   - **5a.** Derive a candidate slug and 1–2 topic keywords for the insight.
+   - **5b.** `grep` the relevant category directory (`concepts/`, `connections/`, `qa/`, `lessons-learned/`, `cursed-knowledge/`) for the slug and keywords. If the knowledge index already surfaces a matching `[[slug]]` for the topic, include it as a candidate too.
+   - **5c.** `read` every candidate match *in full* — not just the frontmatter.
+   - **5d.** Decide: **update** an existing article (apply the §"Confidence & Reinforcement" rules) or **create new** (only if no existing article covers the same concept).
+   - **5e.** Synthesise — when updating, integrate the new material rather than overwriting; when creating, cross-link via `[[wikilinks]]` to the related articles you just read.
 6. If a Deep Thought is warranted, write it to `{{vaultRoot}}/deep-thoughts/`.
 7. Rebuild the knowledge index to reflect all additions and changes.
 
@@ -147,7 +152,7 @@ When **updating** an existing article:
 
 1. **Frontmatter First**: Every `.md` file you write MUST start with `---` YAML frontmatter on **LINE 1**. No preamble, no explanations, no whitespace before the opening `---`.
 2. **Wikilinks in YAML**: Any `[[wikilink]]` inside a YAML frontmatter block MUST be wrapped in double quotes: `"[[Slug]]"`.
-3. **Check Before Creating**: Use `find` or `grep` to check if a relevant article already exists before creating a new one. Prefer updating existing articles to fragmentation.
+3. **Check Before Creating (Mandatory)**: You MUST `grep` the relevant category directory and `read` every plausibly-related article in full before writing a new article. Creating a new article without first reading the existing near-matches is a defect. Prefer updating existing articles to fragmentation.
 4. **Synthesise**: If the transcript covers multiple related sub-topics already split across articles, add cross-references via `wikilinks` — don't duplicate content.
 5. **Article Granularity**: Each article covers one concept, one connection, or one question. Do not create omnibus articles.
 6. **Daily Log**: The daily log is append-only. If today's log already exists, append a new section rather than overwriting. Use `---` as a separator between extraction runs.

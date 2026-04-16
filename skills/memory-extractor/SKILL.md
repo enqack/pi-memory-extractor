@@ -16,7 +16,9 @@ Transforms session insights into long-term structured knowledge stored in the pr
 ## Available Tools
 - `extract_knowledge` — Serialize the current session and run the extraction subprocess.
 - `compile_knowledge` — Compile daily logs into structured knowledge base articles.
-- `search_knowledge` — Search the knowledge index by keyword.
+- `search_index` — Keyword search against the knowledge index only.
+- `search_articles` — Full-text keyword search across the active knowledge/ categories.
+- `search_knowledge` — Full-text keyword search across the whole vault (articles + daily logs + deep thoughts).
 - `read_knowledge_article` — Read a full article from the vault by slug.
 - `sync_knowledge_index` — Rebuild the master knowledge/index.md from all vault articles.
 - `cleanup_knowledge_vault` — Archive stale or faded articles.

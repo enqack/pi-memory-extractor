@@ -9,7 +9,7 @@ import { getArticlesToArchive } from "./archiver.js";
 import { TODAY } from "./utils.js";
 import { logger } from "./logger.js";
 
-const ACTIVE_CATEGORIES = [
+export const ACTIVE_CATEGORIES = [
   "concepts",
   "connections",
   "qa",

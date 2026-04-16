@@ -230,7 +230,9 @@ One paragraph. Used verbatim in smart recall and index building.
 |------|-------------|
 | `extract_knowledge` | LLM-callable extraction. Params: `reason` (string), `deep` (bool), `all` (bool) |
 | `compile_knowledge` | LLM-callable compilation. Params: `force` (bool) |
-| `search_knowledge` | Keyword search against `knowledge/index.md` |
+| `search_index` | Keyword search against `knowledge/index.md` only |
+| `search_articles` | Full-text keyword search across the active `knowledge/` categories |
+| `search_knowledge` | Full-text keyword search across the whole vault (`knowledge/` + `daily/` + `deep-thoughts/`) |
 | `read_knowledge_article` | Read a full article by slug |
 | `sync_knowledge_index` | Programmatically rebuild `knowledge/index.md` from all active articles |
 | `cleanup_knowledge_vault` | Archive faded (confidence ≤ 0) and stale (> 6 months) articles |
