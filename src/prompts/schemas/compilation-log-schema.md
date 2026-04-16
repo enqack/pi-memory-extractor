@@ -19,18 +19,18 @@ Each compilation run MUST be recorded as a Level 2 header with a timestamp.
 ## YYYY-MM-DD HH:MM — Compilation Run
 ```
 
-## 2. Activity Manifest
-List the specific actions taken during the turn.
+## 3. Activity Manifest
+List the specific actions taken during the run.
 
-- **Sources**: [List of daily logs processed]
+- **Sources**: `[[YYYY-MM-DD]]`, `[[YYYY-MM-DD]]` — wikilinks to each daily log processed
 - **Created**: [Slugs of new articles]
 - **Updated**: [Slugs of articles refined with new info]
 - **Archived**: [Slugs moved to archive/]
 - **Skipped**: [Reason if no knowledge was refined]
 
-## 3. Decision Log (Optional)
+## 4. Decision Log (Optional)
 Record any major maintenance decisions made (e.g., "Merged articles A and B into new concept C").
 
-## 4. Quality Standards
+## 5. Quality Standards
 - **Integrity**: Never delete or edit past log entries.
 - **Reference**: Use `[[wikilinks]]` for all created or updated article slugs.

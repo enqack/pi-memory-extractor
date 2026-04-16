@@ -1,36 +1,37 @@
 ---
 name: memory-extractor
-description: Extracts session insights into structured knowledge using an orchestrated workflow. Use for saving technical discoveries, entities, and relationships to a permanent vault.
+description: Extracts session insights into structured knowledge and stores them in the project vault. Use when the user asks to save something for later, after significant discoveries, or when compiling daily logs.
 ---
 
 # Skill: Memory Extractor
 
-The Memory Extractor skill allows you to transform session insights into long-term structured knowledge. It uses a multi-step orchestrated workflow to ensure high-fidelity capture.
+Transforms session insights into long-term structured knowledge stored in the project's knowledge vault.
 
 ## When to use
-- After a significant technical discovery or decision.
-- Before a session compaction or shutdown (usually automatic).
-- When the user asks to "save this for later" or "remember this".
-- When you want to compile daily logs into a structured knowledge base.
+- After a significant technical discovery, decision, or architectural change.
+- When the user asks to "save this", "remember this", or "extract that".
+- Before session compaction or shutdown (this happens automatically).
+- To compile accumulated daily logs into structured knowledge articles.
 
-## Tools
-- `extract_knowledge`: Triggers the 3-step extraction workflow (Analysis -> Mapping -> Synthesis).
-- `compile_knowledge`: Compiles daily logs into the permanent vault.
-- `search_knowledge`: Search the existing knowledge base.
-- `read_knowledge_article`: Read a full article from the vault.
+## Available Tools
+- `extract_knowledge` — Serialize the current session and run the extraction subprocess.
+- `compile_knowledge` — Compile daily logs into structured knowledge base articles.
+- `search_knowledge` — Search the knowledge index by keyword.
+- `read_knowledge_article` — Read a full article from the vault by slug.
+- `sync_knowledge_index` — Rebuild the master knowledge/index.md from all vault articles.
+- `cleanup_knowledge_vault` — Archive stale or faded articles.
 
-## Workflow: Knowledge Extraction
-When `extract_knowledge` is triggered, an **Orchestrator** will guide you through three turns:
+## Extraction Workflow
+When `extract_knowledge` is called, a subprocess agent with a fresh context window:
+1. Reads the session transcript.
+2. Reads the existing knowledge index.
+3. Appends structured insights to today's daily log.
+4. Creates or updates knowledge articles (concepts, connections, Q&A, lessons-learned, cursed-knowledge).
+5. Optionally writes a Jack Handey-style Deep Thought.
+6. Rebuilds `knowledge/index.md`.
 
-1. **Phase 1: Analysis**: Identify 3 dominant themes and check for "Deep Thoughts".
-2. **Phase 2: Mapping**: Identify at least 4 entities and their relationships.
-3. **Phase 3: Synthesis**: Call `submit_knowledge_synthesis` with the final JSON packet.
-
-Follow the Orchestrator's directives exactly during these phases.
-
-## Workflow: Compilation
-When `compile_knowledge` is triggered, you will be given a list of daily logs. Your task is to:
-1. Read the logs.
-2. Extract concepts, Q&A, and lessons learned.
-3. Update the `knowledge/index.md` and create/edit articles in the appropriate sub-directories.
-4. Archive old articles if prompted.
+## Compilation Workflow
+When `compile_knowledge` is called, a compilation prompt is sent to the current agent, which:
+1. Reads all uncompiled daily logs.
+2. Synthesizes and updates the knowledge base articles.
+3. Runs `sync_knowledge_index` as the final step.

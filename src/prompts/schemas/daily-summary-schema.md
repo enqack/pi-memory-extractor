@@ -34,10 +34,9 @@ Challenges that remain open and need follow-up in future sessions.
 
 ### 🧠 Deep Thought Topics
 Briefly list the topics of any abstract thoughts marked with `[[deep_thought]]`.
-*Note: Full extraction of these topics is handled as a separate standalone artifact turn.*
 
 ## 3. Context Summary
-- **Context**: A 1-2 sentence description of the overall session purpose (e.g., "Debugging the memory extractor's compaction logic").
+- **Context**: A 1–2 sentence description of the overall session purpose.
 
 ## 4. Quality Standards
 - **Conciseness**: Use bullet points. Avoid conversational filler.

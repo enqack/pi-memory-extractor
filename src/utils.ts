@@ -1,75 +1,77 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PiMemoryConfig } from "./config.js";
+import { extractSection } from "./markdown.js";
 
 /**
- * Returns today's date in the system's local timezone (YYYY-MM-DD).
+ * Returns today's date in the system's local timezone as YYYY-MM-DD.
  */
 export function TODAY(): string {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 /**
- * Resolves the vault root path.
+ * Format a Date as a local-time ISO string truncated to the minute: YYYY-MM-DDTHH:MM.
+ * Used for session header lines in transcripts so the extraction agent can derive
+ * accurate deep thought filenames without timezone conversion.
  */
-export function findVaultRoot(startDir: string, config: PiMemoryConfig): string {
-  // Just use the configured VAULT_ROOT relative to the startDir (project root)
-  const vaultPath = path.join(startDir, config.VAULT_ROOT);
-  
-  if (!fs.existsSync(vaultPath)) {
-    console.log(`[pi-memory-extractor] Vault root does not exist. It will be created at: ${vaultPath}`);
-  } else {
-    console.log(`[pi-memory-extractor] Using vault root: ${vaultPath}`);
-  }
-
-  return vaultPath;
+export function toLocalIso(date: Date): string {
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${y}-${mo}-${d}T${h}:${min}`;
 }
 
-const STOP_WORDS = new Set(["this", "that", "with", "from", "your", "have", "been", "into", "their", "there", "which", "about", "could", "would", "should", "using", "these", "those"]);
+/**
+ * Returns the current local time as HH:MM.
+ */
+export function NOW_TIME(): string {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${min}`;
+}
 
 /**
- * Extract potential keywords from text for matching against the KB index.
+ * Resolves the absolute path to the vault root based on config.vaultRoot
+ * relative to the project's working directory.
+ */
+export function findVaultRoot(cwd: string, config: PiMemoryConfig): string {
+  return path.resolve(cwd, config.vaultRoot);
+}
+
+const STOP_WORDS = new Set([
+  "this", "that", "with", "from", "your", "have", "been",
+  "into", "their", "there", "which", "about", "could", "would",
+  "should", "using", "these", "those",
+]);
+
+/**
+ * Extract unique lowercase keywords from a string for index matching.
  */
 export function extractKeywords(text: string): string[] {
-  // Simple heuristic: words > 3 chars, split by spaces/punctuation, lowercased
-  // Also include the project name and common technical terms.
-  const words = text.toLowerCase()
+  const words = text
+    .toLowerCase()
     .split(/[^a-z0-9-]+/)
-    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
+    .filter((w) => w.length > 3 && !STOP_WORDS.has(w));
   return [...new Set(words)];
 }
 
 /**
- * Reads a knowledge article and extracts its "Summary" section.
+ * Read a knowledge article and return the text of its "Summary" section,
+ * or null if the file doesn't exist or has no Summary section.
  */
 export function getArticleSummary(filePath: string): string | null {
   try {
     if (!fs.existsSync(filePath)) return null;
     const content = fs.readFileSync(filePath, "utf-8");
-    const lines = content.split("\n");
-    
-    let summary: string[] = [];
-    let inSummary = false;
-
-    for (const line of lines) {
-      if (line.trim().startsWith("## Summary")) {
-        inSummary = true;
-        continue;
-      }
-      if (inSummary && line.trim().startsWith("## ")) {
-        break; // End of summary section
-      }
-      if (inSummary) {
-        summary.push(line);
-      }
-    }
-
-    const result = summary.join("\n").trim();
-    return result || null;
+    return extractSection(content, "Summary");
   } catch {
     return null;
   }

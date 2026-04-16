@@ -1,88 +1,103 @@
-# Pi Memory Extractor
+# pi-memory-extractor
 
-A knowledge-management extension for the [Pi AI Agent](https://github.com/badlogic/pi-mono). It transforms Pi from a per-session assistant into a long-term project partner by ensuring that no critical insight, decision, or technical discovery is lost between sessions.
-
----
-
-## The Orchestrated Pipeline
-
-Unlike basic extraction methods, this extension uses a **Multi-Step Memory Orchestrator** to ensure high-fidelity knowledge capture. Every extraction goes through a mandatory 3-step workflow:
-
-1.  **Step 1: Analysis (Thematic Categorization)**: The agent identifies dominant, recurring themes, assigning each a `memory_type` (Fact, Preference, Goal, Correction, Pattern) and a initial `confidence` score.
-2.  **Step 2: Mapping (Relationship Deep-Dive)**: The agent maps entities (Concepts, Products, People) and their explicit relationships (e.g., `[A] -> [Implemented via] -> [B]`).
-3.  **Step 3: Synthesis (Final Structured Output)**: The agent compiles the analysis and mapping into a structured JSON packet.
-4.  **Step 4: Resolution (Conflict Handling)**: If new insights conflict with existing high-confidence knowledge, the orchestrator pauses the workflow to resolve the discrepancy with the user before committing via the `submit_knowledge_synthesis` tool.
+A Pi extension that transforms session conversations into a persistent, self-organizing knowledge vault. At the end of each session, it serializes the transcript and spawns a detached subprocess to extract insights — without touching the main session's context budget.
 
 ---
 
-## Core Features
+## How it works
 
-### 🧠 Orchestrated Knowledge Extraction
-Automatically triggers during session compaction or shutdown, or manually via commands. It also features **Reactive Triggering**, which monitors the conversation for linguistic markers of self-correction (e.g., "actually", "wait") or explicit project decisions to initiate extraction autonomously.
+```
+Pi Session
+    │
+    ├── session_start    → inject vault context into the new session
+    ├── session_compact  → serialize transcript → spawn detached subprocess
+    └── session_shutdown → serialize transcript → spawn detached subprocess
 
-### ⏳ Knowledge Lifecycle & Decay
-Introduces a temporal dimension to memory. Each knowledge article tracks its `confidence` (0.0–1.0) and `last_reinforced` date.
-- **Reinforcement**: Active use or referencing of a memory during a session increases its confidence score.
-- **Decay**: Knowledge that is not reinforced during a 30-day compilation cycle suffers a confidence penalty (-0.1).
+Extraction Subprocess (fresh context window)
+    │
+    ├── reads transcript + existing vault
+    ├── appends to daily/YYYY-MM-DD.md (the session's actual date)
+    ├── creates or updates knowledge articles
+    ├── optionally writes a Deep Thought
+    └── rebuilds knowledge/index.md
+```
 
-### 💭 Deep Thoughts
-Captured via `[[deep_thought: Topic]]` markers during the analysis phase. These represent absurdist, meta-cognitive reflections on the coding process or session context, following the Jack Handey "Deep Thought" formula.
-
-### 🔍 Smart Context Injection & Recall
-At session start, the extension injects a summary of the most recent knowledge index. It also uses **Smart Recall**—a keyword-based scoring system—to surface relevant article summaries from the knowledge base based on the initial conversation history.
-
-### 🏗️ Robust Knowledge Compiler
-Compiles daily logs into a structured, tiered knowledge base (Concepts, Connections, Q&A, Lessons Learned, and Cursed Knowledge). It uses incremental logic to only process new logs unless the `--force` flag is used.
-
-### 🧹 Automatic Archiving
-Keeps the knowledge base fresh by automatically moving stale or "faded" information:
-- **Stale**: Articles older than 6 months are moved to the `archive/` directory.
-- **Faded**: Articles whose confidence drops to 0.0 due to lack of reinforcement are moved to `archive/faded/`.
-
-### 🛠️ Automated Knowledge Guardrails
-Ensures the structural integrity of the knowledge base by intercepting `write` and `edit` calls to Markdown files. It automatically:
-- **Repairs Frontmatter**: Strips accidental LLM chatter/thinking before the YAML block.
-- **Quotes Wikilinks**: Ensures `[[links]]` in YAML frontmatter are properly quoted for Obsidian compatibility.
-- **Enforces YAML**: Blocks writes to the knowledge base that lack a valid YAML frontmatter header.
+Extraction runs in a subprocess with its own fresh context window so it can ingest the full transcript without competing with the main session.
 
 ---
 
-## Directory Structure
+## Vault structure
 
-The extension organizes knowledge under a vault root folder (default: `knowledge-base/`) located in the project root:
-
-```text
-project-root/
-└── knowledge-base/          # Vault root (configurable via pi-memory.json)
-    ├── daily/               # Raw daily session logs (YYYY-MM-DD.md)
-    ├── deep-thoughts/       # Absurdist reflections and "Deep Thought" articles
-    ├── reports/             # Generated summaries and project reports
-    └── knowledge/           # Compiled knowledge base
-        ├── index.md         # Master index (catalog)
-        ├── log.md           # Compilation history
-        ├── concepts/        # Single-topic articles
-        ├── connections/     # Relational articles
-        ├── qa/              # Question-and-answer articles
-        ├── lessons-learned/ # High-level project/task takeaways
-        ├── cursed-knowledge/# Hard-to-fix or obscure technical issues
-        └── archive/         # Stale knowledge (archived after 6 months)
-            └── faded/       # Knowledge that has decayed due to lack of reinforcement
+```
+knowledge-base/
+├── daily/                  YYYY-MM-DD.md — append-only session logs
+├── deep-thoughts/          Jack Handey-style session reflections
+├── reports/                compiled knowledge reports
+└── knowledge/
+    ├── index.md            master index — [[slug]] — one-line summary
+    ├── log.md              compilation run history
+    ├── concepts/           single-topic technical articles
+    ├── connections/        relational articles (A ↔ B)
+    ├── qa/                 question-and-answer articles
+    ├── lessons-learned/    retrospectives and high-level takeaways
+    ├── cursed-knowledge/   obscure bugs, hard-to-fix gotchas
+    └── archive/
+        └── faded/          articles decayed to confidence ≤ 0
 ```
 
 ---
 
-## Technical Notes
+## Session context injection
 
-- **Reactive Extraction Heuristics**: Monitors the conversation stream for linguistic markers of "pivots" or "corrections" to capture state changes as they happen.
-- **Confidence-Based Persistence**: Implements a "forgetting" curve for low-utility knowledge, ensuring the active vault remains focused on currently relevant information.
-- **Conflict Resolution Logic**: Scans the knowledge index during synthesis to detect potential discrepancies with existing entries, enabling proactive reconciliation.
-- **Multi-Step Orchestration**: Uses the `MemoryOrchestrator` to manage stateful extraction workflows across multiple agent turns, storing progress in the session history and using the `agent_end` event for progression.
-- **Interactive Visualization**: The `submit_knowledge_synthesis` tool provides a custom TUI (`SynthesisTabs`) for reviewing extracted themes, relationships, and takeaways.
-- **Thread-Safe Writes**: Uses `withFileMutationQueue` to ensure that concurrent tool executions or automated triggers don't corrupt the knowledge vault.
-- **Smart Recall Heuristics**: Uses a lightweight keyword-based scoring system to find relevant articles in the `index.md` based on recent conversation history, injecting summaries to provide context.
-- **Structural Integrity**: Actively repairs and enforces Obsidian-compatible YAML frontmatter in knowledge articles.
-- **Cascading Configuration**: Supports a three-tiered configuration system (System → User → Project) via `pi-memory.json`.
-- **Event-Driven Lifecycle**: Automatically manages memory lifecycle through `session_start`, `agent_end`, `session_compact`, and `session_shutdown` hooks.
+At `session_start`, the extension injects three pieces of context into the session as a silent user message (`triggerTurn: false`):
+
+1. **Knowledge index** — the master index, truncated to first 5 + last 15 lines for large vaults.
+2. **Today's daily log** — the running log for the current day, if it exists.
+3. **Smart recall** — keywords are extracted from the last 10 messages, scored against the index, and the top 3 matching articles have their summaries injected.
+
+---
+
+## Article lifecycle
+
+Articles use YAML frontmatter + Markdown body and are Obsidian-compatible.
+
+```markdown
+---
+title: "Example Concept"
+type: concept
+maturity: developing
+revision: 3
+category: "tooling"
+tags: [typescript, build]
+date: 2026-01-10
+last_reinforced: 2026-04-14
+confidence: 0.9
+memory_type: fact
+sources:
+  - "[[2026-01-10]]"
+wikilinks:
+  - "[[related-concept]]"
+---
+
+## Summary
+One paragraph summary used in smart recall and index building.
+
+## Details
+...
+```
+
+All inter-document references use wikilinks — including `sources`, which links to the daily log by date slug (`[[YYYY-MM-DD]]`), and `wikilinks`, which links to related articles.
+
+### Confidence scoring
+
+| Event | Effect |
+|-------|--------|
+| Article created (explicit fact) | 0.7 – 0.9 |
+| Article created (inferred) | 0.5 – 0.6 |
+| Article reinforced | += 0.1 (max 1.0) |
+| Compilation decay (> 30 days unreinforced) | -= 0.1 per run |
+| confidence ≤ 0 | moved to `archive/faded/` |
+| mtime > 6 months | moved to `archive/` |
 
 ---
 
@@ -90,69 +105,81 @@ project-root/
 
 | Command | Description |
 |---------|-------------|
-| `/extract-knowledge` | Manually trigger session knowledge extraction. |
-| `/extract-knowledge --deep` | Trigger extraction scanning ALL historical session files. |
-| `/compile-knowledge` | Compile daily logs into the structured knowledge base. |
-| `/compile-knowledge --force`, `-f` | Re-process all daily logs, including already-compiled entries. |
+| `/extract-knowledge` | Run foreground extraction on the current session → today's daily log |
+| `/extract-knowledge --deep` | Extract recent history (bounded by `deepExtractMaxChars`) → per-date daily logs |
+| `/extract-knowledge --all` | Extract every historical session → per-date daily logs, no budget cutoff |
+| `/compile-knowledge` | Compile unprocessed daily logs into knowledge articles |
+| `/compile-knowledge --force` | Reprocess all daily logs, including already-compiled ones |
+
+### Extraction modes
+
+All three extraction modes write to per-date daily logs (e.g. sessions from 2026-04-10 → `daily/2026-04-10.md`). The modes differ only in which sessions are included:
+
+- **No flag** — current session branch only.
+- **`--deep`** — all historical sessions, newest-first, until `deepExtractMaxChars` is reached. Older sessions are skipped once the budget is exhausted.
+- **`--all`** — every historical session with no cutoff. Each day's sessions are bounded individually by `subprocessMaxChars`.
+
+Both `--deep` and `--all` run one extraction subprocess per calendar day, sequentially.
 
 ---
 
 ## Tools
 
-The extension registers several tools that can be invoked by the agent or manually:
-
 | Tool | Description |
 |------|-------------|
-| `extract_knowledge` | Triggers the orchestrated extraction workflow. Supports `deep` mode. |
-| `compile_knowledge` | Triggers the compilation of daily logs. |
-| `submit_knowledge_synthesis` | **(Internal)** Used by the orchestrator to commit final synthesized knowledge. Renders interactive `SynthesisTabs`. |
-| `cleanup_knowledge_vault` | Archives articles older than 6 months. |
-| `search_knowledge` | Search the knowledge base index for specific keywords. |
-| `read_knowledge_article` | Read the full content of a specific knowledge article by its slug. |
+| `extract_knowledge` | LLM-callable extraction. Parameters: `reason` (string), `deep` (bool), `all` (bool) |
+| `compile_knowledge` | LLM-callable compilation. Parameters: `force` (bool) |
+| `search_knowledge` | Search `knowledge/index.md` by keyword |
+| `read_knowledge_article` | Read a full article by slug |
+| `sync_knowledge_index` | Rebuild `knowledge/index.md` from all vault articles |
+| `cleanup_knowledge_vault` | Archive stale and faded articles |
 
 ---
 
 ## Installation
 
-### Method 1: Pi Package Manager
-
-Once published, install the extension globally via the Pi CLI:
-
 ```bash
-pi install npm:pi-memory-extractor
-```
-
-### Method 2: Project Settings (Recommended)
-
-Add the extension to your project's `.pi/agent/settings.json`:
-
-```json
-{
-  "extensions": [
-    "./extensions/pi-memory-extractor/src/index.ts"
-  ]
-}
+pi install git:github.com/enqack/pi-memory-extractor
 ```
 
 ---
 
 ## Configuration
 
-`pi-memory-extractor` uses a three-tiered, cascading configuration system.
+The extension resolves config from three tiers, highest precedence first:
 
-### Resolution Order
+1. **Project** — `pi-memory.json` or `.pi-memory.json` (walks up 6 directory levels)
+2. **User** — `~/.config/pi-memory.json` or `~/.pi-memory.json`
+3. **System** — `/etc/pi-memory.json`
 
-1.  **Project**: `pi-memory.json` or `.pi-memory.json` in the nearest ancestor directory (Highest Precedence).
-2.  **User**: `~/.config/pi-memory.json` or `~/.pi-memory.json`.
-3.  **System**: `/etc/pi-memory.json`.
-4.  **Internal Defaults** (Lowest Precedence).
+All keys are optional. Unset keys fall back to the defaults below.
 
-### Configuration Schema
+| Key | Default | Description |
+|-----|---------|-------------|
+| `vaultRoot` | `"knowledge-base"` | Vault directory, relative to project root |
+| `maxHistoryMessages` | `50` | Messages serialized for context injection |
+| `maxMessageChars` | `1000` | Per-message char limit for context injection |
+| `maxToolResultChars` | `200` | Tool result char limit for context injection |
+| `globalMaxChars` | `15000` | Total char cap for injected context |
+| `subprocessMaxChars` | `200000` | Transcript char budget per extraction subprocess |
+| `deepExtractMaxChars` | `100000` | Total char budget for `--deep` session selection |
+| `subprocessTools` | `"read,write,edit,grep,find,bash"` | Tools available to the extraction subprocess |
+| `subprocessModel` | _(inherit)_ | Optional model override for the extraction subprocess |
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `VAULT_ROOT` | `string` | `"knowledge-base"` | Name of the vault folder relative to the project root. |
-| `DAILY` | `string` | `"daily"` | Sub-directory for raw daily session logs. |
-| `KNOWLEDGE` | `string` | `"knowledge"` | Sub-directory for compiled knowledge articles. |
-| `DEEP_THOUGHTS` | `string` | `"deep-thoughts"` | Sub-directory for deep-thought criteria. |
-| `REPORTS` | `string` | `"reports"` | Sub-directory for generated reports. |
+Example `pi-memory.json`:
+
+```json
+{
+  "vaultRoot": "knowledge-base",
+  "subprocessModel": "gemma4:26b"
+}
+```
+
+---
+
+## Guardrails
+
+- **Frontmatter repair** — all `write` calls to `knowledge/` files are intercepted, stripped of any LLM preamble, and round-tripped through `js-yaml` to fix `[[wikilink]]` quoting.
+- **Frontmatter validation** — writes are blocked if the repaired document still lacks valid YAML frontmatter, with a reason returned to the agent.
+- **Atomic writes** — `withFileMutationQueue()` prevents concurrent corruption of vault files.
+- **TypeBox validation** — session `.jsonl` entries are validated before parsing; invalid entries are silently skipped.

@@ -20,7 +20,7 @@ last_reinforced: YYYY-MM-DD
 confidence: 0.9 # (0.0 - 1.0)
 memory_type: fact # fact | preference | goal | correction | pattern
 sources:
-  - "daily-YYYY-MM-DD.md"
+  - "[[YYYY-MM-DD]]"
 wikilinks:
   - "[[SlugA]]"
   - "[[SlugB]]"
@@ -32,16 +32,16 @@ wikilinks:
 ## 2. Structural Patterns
 
 ### A. Concept Article (`concepts/<slug>.md`)
-Use for individual technical patterns, architectural rules, or specific device behaviors discovered.
-1. **Summary**: 2-3 sentences max.
+Use for individual technical patterns, architectural rules, or specific behaviors discovered.
+1. **Summary**: 2–3 sentences max.
 2. **Key Points**: Bullet list of critical facts.
 3. **Details**: Deep explanation of the "How" and "Why."
 4. **Practical Application**: Code snippets or workflow steps.
 5. **Connections**: Wikilinks to related concepts.
-6. **Sources**: Links to the daily logs that provided this knowledge.
+6. **Sources**: Wikilinks to the daily logs that provided this knowledge.
 
 ### B. Connection Article (`connections/<slug>.md`)
-Use for documenting how two or more concepts interact (e.g., "React State + Event Batching").
+Use for documenting how two or more concepts interact.
 1. **Relationship**: Paragraph describing the interaction.
 2. **Examples**: Real-world cases of the connection.
 3. **Practical Implications**: How this interaction affects production decisions.
@@ -49,12 +49,12 @@ Use for documenting how two or more concepts interact (e.g., "React State + Even
 
 ### C. Q&A Article (`qa/<slug>.md`)
 Use for capturing specific challenges and their definitive solutions.
-1. **Question**: The exact challenge or "How do I...?"
+1. **Question**: The exact challenge or "How do I…?"
 2. **Short Answer**: One-sentence resolution.
 3. **Full Breakdown**: Detailed steps to the solution.
-4. **Related Patterns**: Links to relevant concepts.
+4. **Related Patterns**: Wikilinks to relevant concepts.
 
 ## 3. Quality Standards
-- **Word Count**: Minimum 200 words for "Stable" articles.
+- **Word Count**: Minimum 200 words for "stable" articles.
 - **Interlinking**: Minimum 2 wikilinks to other knowledge artifacts.
 - **Tone**: Professional, technical, and objective.

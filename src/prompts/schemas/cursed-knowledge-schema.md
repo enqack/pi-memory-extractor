@@ -18,7 +18,7 @@ tags:
   - tag2
 date: YYYY-MM-DD
 sources:
-  - "daily-YYYY-MM-DD.md"
+  - "[[YYYY-MM-DD]]"
 wikilinks: []
 ---
 ```

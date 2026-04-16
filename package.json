@@ -1,17 +1,27 @@
 {
   "name": "pi-memory-extractor",
   "version": "0.1.0",
+  "type": "module",
   "description": "A memory extraction and compilation pipeline for Pi — proper ExtensionAPI implementation.",
   "main": "src/index.ts",
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "latest",
     "@types/handlebars": "^4.0.40",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.32.0",
-    "handlebars": "^4.7.9"
+    "handlebars": "^4.7.9",
+    "js-yaml": "^4.1.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "remark-stringify": "^11.0.0",
+    "remark-wiki-link": "^2.0.1",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0"
   },
   "pi": {
     "extensions": [

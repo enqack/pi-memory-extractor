@@ -38,6 +38,7 @@ The one-line summary is critical for the "Smart Recall" system. It must:
 - Be under 120 characters.
 - Start with a capital letter and end with a period.
 
-## 3. Maintenance Rule
+## 3. Maintenance Rules
 - **Alphabetical Order**: Slugs within each section MUST be kept in alphabetical order.
-- **Atomic Updates**: Every single article creation or change MUST trigger an update to this index.
+- **Automated Rebuilds**: The preferred method for updating this index is via the `sync_knowledge_index` tool.
+- **Atomic Updates**: Every article creation or change MUST trigger an index update.
