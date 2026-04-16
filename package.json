@@ -1,6 +1,6 @@
 {
   "name": "pi-memory-extractor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "A memory extraction and compilation pipeline for Pi — proper ExtensionAPI implementation.",
   "main": "src/index.ts",
