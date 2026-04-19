@@ -39,6 +39,30 @@ export function NOW_TIME(): string {
 }
 
 /**
+ * Returns the current local time as ISO-8601 with timezone offset,
+ * second precision: YYYY-MM-DDTHH:MM:SS±HH:MM.
+ * Used for article frontmatter `date` / `last_reinforced` so intra-day
+ * writes are ordered and the wall-clock time is preserved without UTC shift.
+ */
+export function NOW_ISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const sec = String(d.getSeconds()).padStart(2, "0");
+
+  const offsetMin = -d.getTimezoneOffset(); // flip sign to match ISO convention
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const absMin = Math.abs(offsetMin);
+  const offH = String(Math.floor(absMin / 60)).padStart(2, "0");
+  const offM = String(absMin % 60).padStart(2, "0");
+
+  return `${y}-${mo}-${day}T${h}:${min}:${sec}${sign}${offH}:${offM}`;
+}
+
+/**
  * Resolves the absolute path to the vault root based on config.vaultRoot
  * relative to the project's working directory.
  */

@@ -16,7 +16,9 @@ category: Workflow # Workflow | Architecture | Management | etc.
 tags:
   - tag1
   - tag2
-date: YYYY-MM-DD
+date_created: "2026-04-17T14:32:00-07:00" # full local-ISO timestamp with offset
+last_reinforced: "2026-04-17T14:32:00-07:00"
+confidence: 0.9 # (0.0 - 1.0)
 sources:
   - "[[YYYY-MM-DD]]"
 wikilinks: []

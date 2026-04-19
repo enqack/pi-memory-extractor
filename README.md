@@ -13,9 +13,10 @@ A Pi extension that transforms session conversations into a persistent, self-org
 
 Pi Session
     │
-    ├── session_start     → inject vault context into new session
-    ├── session_compact   → serialize transcript → spawn detached subprocess
-    └── session_shutdown  → serialize transcript → spawn detached subprocess
+    ├── session_start          → inject vault context into new session
+    ├── session_before_compact → update UI status ("waiting for compaction…")
+    ├── session_compact        → serialize transcript → spawn detached subprocess
+    └── session_shutdown       → serialize transcript → spawn detached subprocess
 
 Extraction Subprocess (fresh context window, no impact on main session)
     │
@@ -74,8 +75,10 @@ knowledge-base/
 
 At `session_compact` and `session_shutdown`, the extension serializes the current session transcript and spawns a **detached subprocess** running a fresh instance of the pi agent. The subprocess has its own context window — it does not compete with the main session — and runs to completion even after the parent session exits.
 
+The subprocess is invoked as `pi --mode json -p --no-session` with the configured tools and model. It receives its transcript via a temp file written to `/tmp/pi-mem-extract-XXXXXX/transcript.md` before the process is spawned.
+
 The subprocess:
-1. Reads the serialized transcript from a temp file
+1. Reads the serialized transcript from the temp file
 2. Reads `knowledge/index.md` to understand what is already known
 3. Reads today's `daily/YYYY-MM-DD.md` to append rather than overwrite
 4. Writes or appends the daily log with categorized findings
@@ -107,7 +110,7 @@ Compilation is the refinement step that transforms raw extraction logs into poli
 
 ### What it does
 
-1. **Identify uncompiled logs** — reads `knowledge/log.md` and parses its Sources sections to build a set of already-processed daily logs. Only unprocessed logs are included unless `--force` is passed.
+1. **Identify uncompiled logs** — scans `daily/` for `.md` files that do not have `processed: true` in their frontmatter. Only those files are included unless `--force` is passed, which reprocesses all logs regardless of their `processed` flag.
 2. **Apply confidence decay** — before handing anything to the LLM, the system automatically applies a −0.1 confidence penalty to any article in an active category whose `last_reinforced` date is more than 30 days ago. Articles already at zero are left for the archiver. The LLM is explicitly instructed not to apply decay manually.
 3. **Send the compilation prompt** — a Handlebars template (`compilation.md`) is rendered with the list of logs to process, vault paths, the current date, and a list of articles flagged for archiving. It is sent as a follow-up message to the current agent.
 4. **LLM synthesises** — the agent reads each daily log and merges findings into the knowledge base using a **recursive synthesis** approach: it must `ls` and `grep` for related articles before creating anything new, preferring to enrich and cross-link existing articles over fragmentation.
@@ -115,7 +118,7 @@ Compilation is the refinement step that transforms raw extraction logs into poli
 
 ### Compilation log
 
-Every run appends an entry to `knowledge/log.md` recording the sources processed, articles created or updated, articles archived, and any major synthesis decisions. This is how the system tracks which logs have already been compiled.
+Every run appends an entry to `knowledge/log.md` recording the sources processed, articles created or updated, articles archived, and any major synthesis decisions. After processing each daily log the compiler also sets `processed: true` in that log's frontmatter — this is what prevents re-processing on future runs.
 
 ### Confidence decay
 
@@ -154,7 +157,12 @@ At `session_start`, the extension injects vault context as a silent user message
 
 ## Article lifecycle
 
-Articles use YAML frontmatter + Markdown body and are Obsidian-compatible. All inter-document references use wikilinks.
+Articles use YAML frontmatter + Markdown body and are Obsidian-compatible. All inter-document references use wikilinks. Notable fields:
+
+- `date_created` — full local ISO timestamp with UTC offset (`YYYY-MM-DDTHH:MM:SS±HH:MM`), set at creation
+- `last_reinforced` — same format, updated on every reinforcement during compilation
+- `status` — set to `"archived"` when an article is moved to the archive
+- `processed` — daily logs only; set to `true` by the compiler after the log has been incorporated
 
 ```markdown
 ---
@@ -164,8 +172,8 @@ maturity: developing
 revision: 3
 category: "tooling"
 tags: [typescript, build]
-date: 2026-01-10
-last_reinforced: 2026-04-14
+date_created: 2026-01-10T14:32:00+10:00
+last_reinforced: 2026-04-14T09:15:00+10:00
 confidence: 0.9
 memory_type: fact
 sources:
@@ -197,7 +205,7 @@ One paragraph. Used verbatim in smart recall and index building.
 |----------|---------|
 | `seed` | Newly extracted, unverified |
 | `developing` | Reinforced across multiple sessions |
-| `stable` | Well-established, minimum 200 words, ≥ 2 cross-links |
+| `stable` | Well-established, ≥ 2 reinforcements or explicit author decision |
 
 ### Confidence scoring
 
@@ -252,7 +260,7 @@ pi install git:github.com/enqack/pi-memory-extractor
 Config is resolved from three tiers, highest precedence first:
 
 1. **Project** — `pi-memory.json` or `.pi-memory.json` (walks up 6 directory levels from cwd)
-2. **User** — `~/.config/pi-memory.json` or `~/.pi-memory.json`
+2. **User** — `~/.pi/agent/pi-memory.json` or `~/.pi-memory.json`
 3. **System** — `/etc/pi-memory.json`
 
 All keys are optional; unset keys fall back to the defaults below.
@@ -260,9 +268,14 @@ All keys are optional; unset keys fall back to the defaults below.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `vaultRoot` | `"knowledge-base"` | Vault root directory, relative to project root |
+| `daily` | `"daily"` | Daily logs subdirectory, relative to vaultRoot |
+| `knowledge` | `"knowledge"` | Knowledge base subdirectory, relative to vaultRoot |
+| `deepThoughts` | `"deep-thoughts"` | Deep thoughts subdirectory, relative to vaultRoot |
+| `reports` | `"reports"` | Reports subdirectory, relative to vaultRoot |
 | `maxHistoryMessages` | `50` | Messages included in context injection |
 | `maxMessageChars` | `1000` | Per-message character limit for context injection |
 | `maxToolResultChars` | `200` | Tool result character limit for context injection |
+| `maxPartsPerMessage` | `15` | Max content parts per message in transcript |
 | `globalMaxChars` | `15000` | Total character cap for injected context |
 | `subprocessMaxChars` | `200000` | Transcript character budget per extraction subprocess |
 | `deepExtractMaxChars` | `100000` | Total session-selection budget for `--deep` mode |

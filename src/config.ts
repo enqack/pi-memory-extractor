@@ -60,32 +60,29 @@ const DEFAULT_CONFIG: PiMemoryConfig = {
  * Precedence: Project > User > System > Internal Defaults.
  */
 export function getResolvedConfig(projectCwd: string): PiMemoryConfig {
-  const systemConfig = loadSystemConfig();
   const userConfig = loadUserConfig();
   const projectConfig = loadProjectConfig(projectCwd);
 
   return {
     ...DEFAULT_CONFIG,
-    ...systemConfig,
     ...userConfig,
     ...projectConfig,
   };
 }
 
 function loadSystemConfig(): Partial<PiMemoryConfig> {
-  const systemPath = "/etc/pi-memory.json";
-  return readJsonFile(systemPath);
+  return {};
 }
 
 function loadUserConfig(): Partial<PiMemoryConfig> {
   const home = os.homedir();
 
-  // Try ~/.config/pi-memory.json first
-  const xdgConfigPath = path.join(home, ".config", CONFIG_FILENAME);
-  const xdgConfig = readJsonFile(xdgConfigPath);
-  if (Object.keys(xdgConfig).length > 0) return xdgConfig;
+  // 1. Try Agent-specific global config: ~/.pi/agent/pi-memory.json
+  const agentConfigPath = path.join(home, ".pi", "agent", CONFIG_FILENAME);
+  const agentConfig = readJsonFile(agentConfigPath);
+  if (Object.keys(agentConfig).length > 0) return agentConfig;
 
-  // Fallback to ~/.pi-memory.json
+  // 2. Fallback to ~/.pi-memory.json
   const dotHomePath = path.join(home, DOT_CONFIG_FILENAME);
   return readJsonFile(dotHomePath);
 }

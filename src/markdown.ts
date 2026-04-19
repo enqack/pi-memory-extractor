@@ -5,7 +5,7 @@ import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import { wikiLinkPlugin } from "remark-wiki-link";
 import { visit } from "unist-util-visit";
-import yaml from "js-yaml";
+import yaml, { JSON_SCHEMA } from "js-yaml";
 
 /**
  * Shared remark processor — handles YAML frontmatter, GFM, and [[wikilink]] syntax.
@@ -27,7 +27,7 @@ export interface ArticleFrontmatter {
   revision?: number;
   category?: string;
   tags?: string[];
-  date?: string;
+  date_created?: string;
   last_reinforced?: string;
   confidence?: number;
   memory_type?: string;
@@ -57,18 +57,19 @@ export function parseArticle(content: string): {
     return { frontmatter: {}, body: content };
   }
 
-  const frontmatter = (yaml.load(yamlValue) ?? {}) as ArticleFrontmatter;
+  const frontmatter = (yaml.load(yamlValue, { schema: JSON_SCHEMA }) ?? {}) as ArticleFrontmatter;
   const body = content.slice(yamlEndOffset);
   return { frontmatter, body };
 }
 
 /**
  * Serialize a frontmatter object to YAML wrapped in --- delimiters.
- * js-yaml automatically quotes strings containing `[[` (a YAML flow-sequence
- * character), giving Obsidian-compatible output for free.
+ * Uses JSON_SCHEMA so date-shaped strings (YYYY-MM-DD, ISO timestamps) stay
+ * as strings instead of being coerced to JS Date and re-emitted as UTC.
  */
 function serializeFrontmatter(frontmatter: ArticleFrontmatter): string {
   const yamlStr = yaml.dump(frontmatter, {
+    schema: JSON_SCHEMA,
     lineWidth: 120,
     quotingType: '"',
     forceQuotes: false,
@@ -89,6 +90,27 @@ export function updateFrontmatter(
   const { frontmatter, body } = parseArticle(content);
   const merged = { ...frontmatter, ...updates };
   return `${serializeFrontmatter(merged)}\n${body}`;
+}
+
+/**
+ * Flatten arbitrarily nested values into a flat list of `[[slug]]` strings.
+ * Handles the common LLM mistake of writing `- [[slug]]` unquoted, which YAML
+ * parses as a nested flow sequence (`[["slug"]]`) instead of a literal string.
+ */
+function normalizeLinkField(value: unknown): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) {
+      for (const item of v) walk(item);
+    } else if (typeof v === "string") {
+      const trimmed = v.trim();
+      if (!trimmed) return;
+      const slug = trimmed.replace(/^\[+/, "").replace(/\]+$/, "").trim();
+      if (slug) out.push(`[[${slug}]]`);
+    }
+  };
+  walk(value);
+  return out;
 }
 
 /**
@@ -113,6 +135,12 @@ export function repairDocument(content: string): string {
   try {
     const { frontmatter, body } = parseArticle(working);
     if (Object.keys(frontmatter).length > 0) {
+      if ("wikilinks" in frontmatter) {
+        frontmatter.wikilinks = normalizeLinkField(frontmatter.wikilinks);
+      }
+      if ("sources" in frontmatter) {
+        frontmatter.sources = normalizeLinkField(frontmatter.sources);
+      }
       return `${serializeFrontmatter(frontmatter)}\n${body}`;
     }
   } catch {

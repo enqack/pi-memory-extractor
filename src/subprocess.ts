@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { renderTemplate } from "./templates.js";
 import { PiMemoryConfig } from "./config.js";
-import { TODAY, NOW_TIME } from "./utils.js";
+import { TODAY, NOW_TIME, NOW_ISO } from "./utils.js";
 
 /**
  * Resolve the correct command + args to invoke the pi CLI.
@@ -73,6 +73,7 @@ export async function spawnExtractionSubprocess(
 ): Promise<ExtractionSubprocessResult | null> {
   const today = opts.date ?? TODAY();
   const time = NOW_TIME();
+  const now = NOW_ISO();
   const tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "pi-mem-extract-"));
 
   // Write transcript to a temp file to avoid argv size limits.
@@ -82,7 +83,7 @@ export async function spawnExtractionSubprocess(
   );
 
   // Render and write the extraction agent system prompt.
-  const systemPromptContent = renderTemplate("extraction-agent", { today, time, vaultRoot: opts.vaultRoot });
+  const systemPromptContent = renderTemplate("extraction-agent", { today, time, now, vaultRoot: opts.vaultRoot, date: opts.date });
   const systemPromptPath = path.join(tmpDir, "extraction-agent.md");
   await withFileMutationQueue(systemPromptPath, () =>
     fsPromises.writeFile(systemPromptPath, systemPromptContent, { encoding: "utf-8", mode: 0o600 }),
@@ -95,6 +96,7 @@ export async function spawnExtractionSubprocess(
     `Transcript file: ${transcriptPath}`,
     `Today: ${today}`,
     `Time: ${time}`,
+    `Now: ${now}`,
     "",
     "Read the transcript file, then extract and record knowledge into the vault.",
   ].join("\n");

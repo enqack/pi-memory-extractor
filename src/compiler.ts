@@ -6,7 +6,7 @@ import { PiMemoryConfig } from "./config.js";
 import { parseArticle, updateFrontmatter } from "./markdown.js";
 import { renderTemplate } from "./templates.js";
 import { getArticlesToArchive } from "./archiver.js";
-import { TODAY } from "./utils.js";
+import { TODAY, NOW_ISO } from "./utils.js";
 import { logger } from "./logger.js";
 
 export const ACTIVE_CATEGORIES = [
@@ -20,38 +20,33 @@ export const ACTIVE_CATEGORIES = [
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Parse knowledge/log.md to find which daily logs have already been compiled.
- * Returns a Set of bare filenames (e.g. "2026-04-13.md").
+ * Filter a list of daily log filenames to those not yet marked processed.
+ * A log is considered processed when its frontmatter contains `processed: true`.
  */
-export function getCompiledSources(vaultRoot: string, config: PiMemoryConfig): Set<string> {
-  const logPath = path.join(vaultRoot, config.knowledge, "log.md");
-  const compiled = new Set<string>();
-
-  if (!fs.existsSync(logPath)) return compiled;
-
-  const content = fs.readFileSync(logPath, "utf-8");
-  for (const match of content.matchAll(/^- Sources?: (.*)$/gm)) {
-    for (const raw of match[1].split(",")) {
-      const name = path.basename(raw.trim());
-      if (name.endsWith(".md")) compiled.add(name);
+function getUnprocessedLogs(dailyDir: string, logs: string[]): string[] {
+  return logs.filter((file) => {
+    try {
+      const content = fs.readFileSync(path.join(dailyDir, file), "utf-8");
+      const { frontmatter } = parseArticle(content);
+      return frontmatter.processed !== true;
+    } catch {
+      return true;
     }
-  }
-
-  return compiled;
+  });
 }
 
 /**
  * Apply a −0.1 confidence penalty to every active article whose
  * `last_reinforced` date is more than 30 days ago.
- * Returns the number of articles decayed.
+ * Returns the slugs of articles that were decayed.
  */
 async function applyDecay(
   vaultRoot: string,
   config: PiMemoryConfig,
   ctx: ExtensionContext,
-): Promise<number> {
+): Promise<string[]> {
   const now = Date.now();
-  let count = 0;
+  const decayedSlugs: string[] = [];
 
   for (const cat of ACTIVE_CATEGORIES) {
     const dir = path.join(vaultRoot, config.knowledge, cat);
@@ -74,19 +69,19 @@ async function applyDecay(
           await withFileMutationQueue(filePath, async () => {
             fs.writeFileSync(filePath, updateFrontmatter(content, { confidence: newConf }));
           });
-          count++;
+          decayedSlugs.push(`${cat}/${file.replace(/\.md$/, "")}`);
         }
       } catch (err) {
-        logger.warn(`Decay: could not process ${file}: ${err}`);
+        logger.warn(`Decay: could not process ${file}: ${ err}`);
       }
     }
   }
 
-  if (count > 0) {
-    logger.info(`Decay applied to ${count} article(s).`, ctx, true);
+  if (decayedSlugs.length > 0) {
+    logger.info(`Decay applied to ${decayedSlugs.length} article(s).`, ctx, true);
   }
 
-  return count;
+  return decayedSlugs;
 }
 
 /**
@@ -118,8 +113,7 @@ export async function runCompilation(
   }
 
   if (!force) {
-    const compiled = getCompiledSources(vaultRoot, config);
-    const pending = logs.filter((l) => !compiled.has(l));
+    const pending = getUnprocessedLogs(dailyDir, logs);
 
     if (pending.length === 0) {
       logger.info(
@@ -143,10 +137,18 @@ export async function runCompilation(
     logger.info(`Force mode: processing all ${logs.length} log(s).`, ctx, true);
   }
 
-  // Apply decay before handing off to the agent so scores are current.
-  await applyDecay(vaultRoot, config, ctx);
-
+  // Capture faded/stale articles before decay so those lists reflect pre-run state.
   const archiveList = getArticlesToArchive(vaultRoot, config);
+
+  // Apply decay after archiveList snapshot so Faded and Decayed are non-overlapping.
+  const decayedList = await applyDecay(vaultRoot, config, ctx);
+  const fadedList = archiveList
+    .filter((e) => e.endsWith(":faded"))
+    .map((e) => e.split(":")[0]);
+  const staleList = archiveList
+    .filter((e) => e.endsWith(":stale"))
+    .map((e) => e.split(":")[0]);
+
   const relDaily = path.relative(ctx.cwd, dailyDir);
   const relKnowledge = path.relative(ctx.cwd, path.join(vaultRoot, config.knowledge));
   const absKnowledge = path.join(vaultRoot, config.knowledge);
@@ -158,7 +160,11 @@ export async function runCompilation(
     relKnowledge,
     dailyLogs: logs.map((l) => `${relDaily}/${l}`),
     archiveList,
+    decayedList,
+    fadedList,
+    staleList,
     currentDate: TODAY(),
+    currentTimestamp: NOW_ISO(),
   });
 
   logger.info(`Triggering compilation of ${logs.length} daily log(s)…`, ctx, true);
@@ -167,7 +173,13 @@ export async function runCompilation(
   }
 
   try {
-    await pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+    await pi.sendMessage(
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }],
+      } as any,
+      { triggerTurn: true },
+    );
   } catch (err) {
     logger.error(`Failed to trigger compilation follow-up: ${err}`, ctx, true);
     throw err;
