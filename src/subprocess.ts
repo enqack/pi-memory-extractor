@@ -71,6 +71,20 @@ export async function spawnExtractionSubprocess(
 export async function spawnExtractionSubprocess(
   opts: SpawnExtractionOpts,
 ): Promise<ExtractionSubprocessResult | null> {
+  // Clean up stale temp dirs from previous detached runs (older than 1 hour).
+  const ONE_HOUR_MS = 60 * 60 * 1000;
+  try {
+    const tmpBase = os.tmpdir();
+    for (const entry of fs.readdirSync(tmpBase, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith("pi-mem-extract-")) continue;
+      const dirPath = path.join(tmpBase, entry.name);
+      try {
+        if (Date.now() - fs.statSync(dirPath).mtimeMs > ONE_HOUR_MS)
+          fs.rmSync(dirPath, { recursive: true, force: true });
+      } catch { /* ignore individual entry errors */ }
+    }
+  } catch { /* ignore errors reading tmpdir */ }
+
   const today = opts.date ?? TODAY();
   const time = NOW_TIME();
   const now = NOW_ISO();

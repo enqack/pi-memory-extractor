@@ -117,6 +117,10 @@ export interface SearchOptions {
   snippetChars?: number;
 }
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Recursively walk each root directory and substring-match `query`
  * (case-insensitive) against every line of every `.md` file encountered.
@@ -135,6 +139,10 @@ export function searchMarkdownTree(
   const snippetChars = opts.snippetChars ?? 200;
 
   const needle = query.toLowerCase();
+  const wordBoundaryRe = new RegExp(
+    "(?<![a-z0-9-])" + escapeRegex(needle) + "(?![a-z0-9-])",
+    "i",
+  );
   const results: SearchResultFile[] = [];
 
   const files: string[] = [];
@@ -157,7 +165,7 @@ export function searchMarkdownTree(
     const matches: SearchMatch[] = [];
 
     for (let i = 0; i < lines.length && matches.length < maxLinesPerFile; i++) {
-      if (lines[i].toLowerCase().includes(needle)) {
+      if (wordBoundaryRe.test(lines[i])) {
         let snippet = lines[i].trim();
         if (snippet.length > snippetChars) {
           snippet = snippet.slice(0, snippetChars) + "…";

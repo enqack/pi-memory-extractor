@@ -6,12 +6,15 @@ export class Logger {
   log(level: LogLevel, message: string, ctx?: ExtensionContext, notify: boolean = false): void {
     switch (level) {
       case "info":
+        process.stderr.write(`[pi-mem] INFO: ${message}\n`);
         if (notify && ctx) ctx.ui.notify(message, "info");
         break;
       case "warn":
-        if (notify && ctx) ctx.ui.notify(message, "warn");
+        process.stderr.write(`[pi-mem] WARN: ${message}\n`);
+        if (notify && ctx) ctx.ui.notify(message, "warning");
         break;
       case "error":
+        process.stderr.write(`[pi-mem] ERROR: ${message}\n`);
         if (notify && ctx) ctx.ui.notify(message, "error");
         break;
       case "debug":

@@ -14,7 +14,7 @@ YOU MUST EXECUTE REAL TOOL CALLS (`read`, `write`, `edit`, `ls`, `grep`) NOW.
 
 {{#if archiveList}}
 **Articles to ARCHIVE:**
-{{#each archivelist}}
+{{#each archiveList}}
 - {{this}}
 {{/each}}
 **Archiving Rule**: Move these to `{{relKnowledge}}/archive/` (or `{{relKnowledge}}/archive/faded/` if tagged `:faded`) and update frontmatter to `status: archived`.

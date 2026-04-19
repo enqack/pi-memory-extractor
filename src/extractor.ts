@@ -182,6 +182,10 @@ export async function groupSessionsByDate(
       if (!transcript.trim()) continue;
 
       const ts = new Date(header.timestamp);
+      if (isNaN(ts.getTime())) {
+        logger.warn(`Skipping session ${header.id}: invalid timestamp "${header.timestamp}".`);
+        continue;
+      }
       const chunk = `### Session ${header.id} — ${toLocalIso(ts)}\n\n${transcript}`;
 
       const mtime = totalCharBudget !== undefined
@@ -219,6 +223,10 @@ export async function groupSessionsByDate(
   const byDate = new Map<string, string[]>();
   for (const { header, chunk } of selected) {
     const ts = new Date(header.timestamp);
+    if (isNaN(ts.getTime())) {
+      logger.warn(`Skipping session ${header.id} in date grouping: invalid timestamp.`);
+      continue;
+    }
     const y = ts.getFullYear();
     const m = String(ts.getMonth() + 1).padStart(2, "0");
     const d = String(ts.getDate()).padStart(2, "0");

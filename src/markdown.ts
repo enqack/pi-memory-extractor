@@ -126,7 +126,7 @@ export function repairDocument(content: string): string {
   const firstFm = working.indexOf("---\n");
   if (firstFm > 0) {
     const leading = working.slice(0, firstFm).trim();
-    if (leading.length < 1000 && !leading.includes("# ")) {
+    if (leading.length < 1000 && !leading.includes("# ") && !leading.includes("\n\n")) {
       working = working.slice(firstFm);
     }
   }

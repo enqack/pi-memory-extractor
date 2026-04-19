@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
@@ -6,7 +7,7 @@ import { PiMemoryConfig } from "./config.js";
 import { parseArticle, updateFrontmatter } from "./markdown.js";
 import { renderTemplate } from "./templates.js";
 import { getArticlesToArchive } from "./archiver.js";
-import { TODAY, NOW_ISO } from "./utils.js";
+import { TODAY, NOW_ISO, NOW_TIME, getArticleSummary } from "./utils.js";
 import { logger } from "./logger.js";
 
 export const ACTIVE_CATEGORIES = [
@@ -16,6 +17,75 @@ export const ACTIVE_CATEGORIES = [
   "lessons-learned",
   "cursed-knowledge",
 ];
+
+const INDEX_CATEGORIES = [
+  { name: "Concepts", dir: "concepts" },
+  { name: "Connections", dir: "connections" },
+  { name: "Q&A", dir: "qa" },
+  { name: "Lessons Learned", dir: "lessons-learned" },
+  { name: "Cursed Knowledge", dir: "cursed-knowledge" },
+];
+
+/**
+ * Scan all category directories and rebuild knowledge/index.md.
+ * Called by both the sync_knowledge_index tool and runCompilation.
+ */
+export async function rebuildKnowledgeIndex(
+  vaultRoot: string,
+  config: PiMemoryConfig,
+): Promise<void> {
+  const kbDir = path.join(vaultRoot, config.knowledge);
+  const indexPath = path.join(kbDir, "index.md");
+
+  let content =
+    '---\ntitle: "Knowledge Base Index"\ntype: index\n---\n\n# Knowledge Base Index\n\n';
+
+  for (const cat of INDEX_CATEGORIES) {
+    content += `## ${cat.name}\n`;
+    const catDir = path.join(kbDir, cat.dir);
+
+    if (!fs.existsSync(catDir)) {
+      content += "(No articles currently.)\n\n";
+      continue;
+    }
+
+    const files = fs
+      .readdirSync(catDir)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+    if (files.length === 0) {
+      content += "(No articles currently.)\n\n";
+      continue;
+    }
+
+    for (const file of files) {
+      const slug = path.basename(file, ".md");
+      const summary = getArticleSummary(path.join(catDir, file)) ?? "";
+      const firstLine =
+        summary
+          .split("\n")
+          .map((l) => l.trim())
+          .find((l) => l.length > 0) ?? "[No summary]";
+
+      let cleanSummary = firstLine;
+      if (cleanSummary.length > 120) {
+        const cut = cleanSummary.lastIndexOf(" ", 120);
+        cleanSummary = cleanSummary.slice(0, cut > 0 ? cut : 120).trim() + "…";
+      } else if (cleanSummary !== "[No summary]" && !cleanSummary.match(/[.!?]$/)) {
+        cleanSummary += ".";
+      }
+
+      content += `- [[${slug}]] — ${cleanSummary}\n`;
+    }
+    content += "\n";
+  }
+
+  content += `---\n*Last Updated: ${TODAY()} ${NOW_TIME()}*\n`;
+
+  await withFileMutationQueue(indexPath, () =>
+    fsPromises.writeFile(indexPath, content),
+  );
+}
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -183,5 +253,14 @@ export async function runCompilation(
   } catch (err) {
     logger.error(`Failed to trigger compilation follow-up: ${err}`, ctx, true);
     throw err;
+  }
+
+  // Safety net: rebuild the index programmatically after the LLM turn resolves,
+  // in case the LLM forgets to call sync_knowledge_index.
+  try {
+    await rebuildKnowledgeIndex(vaultRoot, config);
+    logger.info("Knowledge index rebuilt (post-compilation safety net).", ctx, false);
+  } catch (err) {
+    logger.warn(`Post-compilation index rebuild failed: ${(err as Error).message}`, ctx, false);
   }
 }

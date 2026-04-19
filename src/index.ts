@@ -24,7 +24,7 @@ import {
   groupSessionsByDate,
 } from "./extractor.js";
 import { spawnExtractionSubprocess } from "./subprocess.js";
-import { runCompilation, ACTIVE_CATEGORIES } from "./compiler.js";
+import { runCompilation, ACTIVE_CATEGORIES, rebuildKnowledgeIndex } from "./compiler.js";
 import { getArticlesToArchive, archiveArticles } from "./archiver.js";
 import { repairDocument, validateDocument } from "./markdown.js";
 import {
@@ -72,12 +72,9 @@ async function buildSessionContext(
         `Use \`search_index\` for a fast index lookup, \`search_articles\` to full-text search the knowledge articles, or \`search_knowledge\` to search the whole vault (articles + daily logs + deep thoughts). Use \`read_knowledge_article(slug)\` to read a full article.`,
     );
   } catch (err) {
-    if ((err as any).code !== "ENOENT") {
-      logger.warn(
-        `Could not read knowledge index: ${(err as Error).message}`,
-        ctx,
-        true,
-      );
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== "ENOENT") {
+      logger.warn(`Could not read knowledge index: ${e.message}`, ctx, true);
     }
   }
 
@@ -88,12 +85,9 @@ async function buildSessionContext(
       parts.push(`## Today's Session Log (${TODAY()})\n\n${content.trim()}`);
     }
   } catch (err) {
-    if ((err as any).code !== "ENOENT") {
-      logger.warn(
-        `Could not read daily log: ${(err as Error).message}`,
-        ctx,
-        true,
-      );
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== "ENOENT") {
+      logger.warn(`Could not read daily log: ${e.message}`, ctx, true);
     }
   }
 
@@ -104,7 +98,7 @@ async function buildSessionContext(
     for (const entry of branch.slice(-10)) {
       if (entry.type === "message") {
         const msg = (entry as any).message;
-        if (typeof msg.content === "string") text += " " + msg.content;
+        if (msg && typeof msg.content === "string") text += " " + msg.content;
       }
     }
 
@@ -845,69 +839,16 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const r = resolve(ctx.cwd);
-      const kbDir = path.join(r.vaultRoot, r.config.knowledge);
-      const indexPath = path.join(kbDir, "index.md");
+      const indexPath = path.join(r.vaultRoot, r.config.knowledge, "index.md");
 
-      const categories = [
-        { name: "Concepts", dir: "concepts" },
-        { name: "Connections", dir: "connections" },
-        { name: "Q&A", dir: "qa" },
-        { name: "Lessons Learned", dir: "lessons-learned" },
-        { name: "Cursed Knowledge", dir: "cursed-knowledge" },
-      ];
-
-      let content =
-        '---\ntitle: "Knowledge Base Index"\ntype: index\n---\n\n# Knowledge Base Index\n\n';
-
-      for (const cat of categories) {
-        content += `## ${cat.name}\n`;
-        const catDir = path.join(kbDir, cat.dir);
-
-        if (!fs.existsSync(catDir)) {
-          content += "(No articles currently.)\n\n";
-          continue;
-        }
-
-        const files = fs
-          .readdirSync(catDir)
-          .filter((f) => f.endsWith(".md"))
-          .sort();
-        if (files.length === 0) {
-          content += "(No articles currently.)\n\n";
-          continue;
-        }
-
-        for (const file of files) {
-          const slug = path.basename(file, ".md");
-          const summary = getArticleSummary(path.join(catDir, file)) ?? "";
-          const firstLine =
-            summary
-              .split("\n")
-              .map((l) => l.trim())
-              .find((l) => l.length > 0) ?? "[No summary]";
-
-          let cleanSummary = firstLine;
-          if (cleanSummary.length > 120) {
-            const cut = cleanSummary.lastIndexOf(" ", 120);
-            cleanSummary =
-              cleanSummary.slice(0, cut > 0 ? cut : 120).trim() + "…";
-          } else if (
-            cleanSummary !== "[No summary]" &&
-            !cleanSummary.match(/[.!?]$/)
-          ) {
-            cleanSummary += ".";
-          }
-
-          content += `- [[${slug}]] — ${cleanSummary}\n`;
-        }
-        content += "\n";
+      try {
+        await rebuildKnowledgeIndex(r.vaultRoot, r.config);
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Index rebuild failed: ${(err as Error).message}` }],
+          details: { status: "error" },
+        };
       }
-
-      content += `---\n*Last Updated: ${TODAY()} ${NOW_TIME()}*\n`;
-
-      await withFileMutationQueue(indexPath, () =>
-        fsPromises.writeFile(indexPath, content),
-      );
 
       return {
         content: [
