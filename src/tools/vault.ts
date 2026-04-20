@@ -32,6 +32,9 @@ export function registerVaultTools(pi: ExtensionAPI, resolve: Resolver): void {
       return container;
     },
     async execute(_id, params, _signal, _onUpdate, ctx) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(params.slug)) {
+        return { content: [{ type: "text", text: "Invalid slug." }], status: "error" };
+      }
       const r = resolve(ctx.cwd);
       const kbDir = path.join(r.vaultRoot, r.config.knowledge);
       const cats = [

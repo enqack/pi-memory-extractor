@@ -138,7 +138,7 @@ async function applyDecay(
         if (now - lastReinforced > THIRTY_DAYS_MS) {
           const newConf = parseFloat(Math.max(0, conf - 0.1).toFixed(1));
           await withFileMutationQueue(filePath, async () => {
-            fs.writeFileSync(filePath, updateFrontmatter(content, { confidence: newConf }));
+            await fsPromises.writeFile(filePath, updateFrontmatter(content, { confidence: newConf }));
           });
           decayedSlugs.push(`${cat}/${file.replace(/\.md$/, "")}`);
         }

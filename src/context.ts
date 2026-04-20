@@ -63,7 +63,13 @@ export async function buildSessionContext(
     for (const entry of branch.slice(-10)) {
       if (entry.type === "message") {
         const msg = (entry as any).message;
-        if (msg && typeof msg.content === "string") text += " " + msg.content;
+        if (msg && typeof msg.content === "string") {
+          text += " " + msg.content;
+        } else if (msg && Array.isArray(msg.content)) {
+          for (const part of msg.content) {
+            if (part.type === "text" && typeof part.text === "string") text += " " + part.text;
+          }
+        }
       }
     }
 

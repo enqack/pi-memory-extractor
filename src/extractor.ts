@@ -81,7 +81,7 @@ export function serializeTranscript(entries: SessionEntry[], config: PiMemoryCon
     } else if (msg.role === "assistant") {
       const text = truncateContent(msg.content, config.maxMessageChars, config.maxPartsPerMessage);
       if (text.trim()) lines.push(`ASSISTANT: ${text.trim()}`);
-    } else if (msg.toString !== undefined && msg.role === "toolResult") {
+    } else if (msg.role === "toolResult") {
       // Check for toolResult. Note: type check is better but this is a quick fix for the snippet.
       const preview = truncateContent(msg.content, config.maxToolResultChars, config.maxPartsPerMessage);
       if (preview.trim()) {
@@ -285,7 +285,7 @@ export async function groupSessionsByDate(
       ) {
         logger.info(
           `Date ${date}: subprocess budget reached; ${
-            chunks.length - included
+            chunks.length - includedCount
           } session(s) omitted.`,
         );
         truncated = true;
