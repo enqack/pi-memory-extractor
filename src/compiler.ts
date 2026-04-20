@@ -7,7 +7,8 @@ import { PiMemoryConfig } from "./config.js";
 import { parseArticle, updateFrontmatter } from "./markdown.js";
 import { renderTemplate } from "./templates.js";
 import { getArticlesToArchive } from "./archiver.js";
-import { TODAY, NOW_ISO, NOW_TIME, getArticleSummary } from "./utils.js";
+import { TODAY, NOW_ISO, NOW_TIME } from "./utils.js";
+import { getArticleSummary } from "./search.js";
 import { logger } from "./logger.js";
 
 export const ACTIVE_CATEGORIES = [

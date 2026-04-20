@@ -17,7 +17,9 @@ tags:
 
 The `processed` field is OPTIONAL on creation and must NOT be set manually. The compilation agent adds it via `edit` after successfully processing the log.
 
-# Session Knowledge — YYYY-MM-DD
+# Daily Session Log — YYYY-MM-DD
+
+## Session Knowledge — YYYY-MM-DD HH:mm
 
 ## 2. Categorization Buckets
 Capture session findings into the following sections.

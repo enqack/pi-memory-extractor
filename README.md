@@ -93,10 +93,10 @@ All three modes group sessions by their actual calendar date and write to that d
 | Command | Scope |
 |---------|-------|
 | `/extract-knowledge` | Current session branch only |
-| `/extract-knowledge --deep` | All historical sessions, newest-first, until `deepExtractMaxChars` is reached |
+| `/extract-knowledge --from YYYY-MM-DD [--to YYYY-MM-DD]` | Sessions in date range; `--to` defaults to today |
 | `/extract-knowledge --all` | Every historical session with no cutoff |
 
-Both `--deep` and `--all` run one extraction subprocess per calendar day, sequentially.
+Both `--from` and `--all` run one extraction subprocess per calendar day, sequentially.
 
 ### Deep Thoughts
 
@@ -225,7 +225,7 @@ One paragraph. Used verbatim in smart recall and index building.
 | Command | Description |
 |---------|-------------|
 | `/extract-knowledge` | Foreground extraction — current session → per-date daily log |
-| `/extract-knowledge --deep` | Foreground extraction — recent history (bounded by `deepExtractMaxChars`) → per-date daily logs |
+| `/extract-knowledge --from YYYY-MM-DD [--to YYYY-MM-DD]` | Foreground extraction — date range → per-date daily logs (`--to` defaults to today) |
 | `/extract-knowledge --all` | Foreground extraction — every historical session → per-date daily logs, no cutoff |
 | `/compile-knowledge` | Compile unprocessed daily logs into knowledge articles |
 | `/compile-knowledge --force` | Reprocess all daily logs, including already-compiled ones |
@@ -236,7 +236,7 @@ One paragraph. Used verbatim in smart recall and index building.
 
 | Tool | Description |
 |------|-------------|
-| `extract_knowledge` | LLM-callable extraction. Params: `reason` (string), `deep` (bool), `all` (bool) |
+| `extract_knowledge` | LLM-callable extraction. Params: `reason` (string), `from` (YYYY-MM-DD), `to` (YYYY-MM-DD, optional; defaults to today), `all` (bool) |
 | `compile_knowledge` | LLM-callable compilation. Params: `force` (bool) |
 | `search_index` | Keyword search against `knowledge/index.md` only |
 | `search_articles` | Full-text keyword search across the active `knowledge/` categories |
@@ -278,7 +278,7 @@ All keys are optional; unset keys fall back to the defaults below.
 | `maxPartsPerMessage` | `15` | Max content parts per message in transcript |
 | `globalMaxChars` | `15000` | Total character cap for injected context |
 | `subprocessMaxChars` | `200000` | Transcript character budget per extraction subprocess |
-| `deepExtractMaxChars` | `100000` | Total session-selection budget for `--deep` mode |
+| `deepExtractMaxChars` | `100000` | Session-selection character budget (reserved; no longer used by default commands) |
 | `subprocessTools` | `"read,write,edit,grep,find,bash"` | Tools available to the extraction subprocess |
 | `subprocessModel` | _(inherit)_ | Optional model override for the extraction subprocess |
 
